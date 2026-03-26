@@ -1,0 +1,28 @@
+node_modules/
+dist/
+
+# 환경 변수 (민감정보: 암호화 키, 비밀번호 등)
+.env
+.env.local
+.env.*.local
+
+# 데이터 (암호화 DB, 백업, 런타임)
+data/secrets.db
+data/secrets.db-shm
+data/secrets.db-wal
+data/safety-backups/
+data/.qdrant-watermark.json
+data/.secrets-watermark.json
+# macOS
+**/.DS_Store
+
+# 도구 상태 (개인 세션/메모리)
+.omc/
+.bkit/
+.claude/
+
+# 로그
+scripts/*.log
+
+# 스크린샷/이미지 (docs 내)
+docs/**/*.png
