@@ -1,311 +1,310 @@
 ---
 name: zime-memory
-description: Qdrant 벡터 DB 기반 개인 메모리 시스템 — 저장, 검색, 수정, 조회, 목록, 삭제, 통계, 내보내기, 가져오기, 건수, 일괄삭제, 고정, 연결, 요약, 백업, Obsidian 동기화, 재인덱싱
+description: |
+  Qdrant + MinIO + SQLCipher 기반 Multi-Store 개인 메모리 시스템.
+  텍스트(general), 이미지(images), 파일(files), 시크릿(secrets) 4개 store를 지원한다.
+  Ollama 임베딩으로 벡터화하여 의미 기반 유사도 검색을 수행한다.
+  '메모리', '기억', 'memory', '저장해줘', '찾아줘', '검색', '이미지 저장', '파일 저장', '암호키', '시크릿', '다운로드' 요청 시 사용합니다.
 triggers:
   - "메모리"
-  - "memory"
   - "기억"
-  - "기억해"
-  - "remember"
-  - "메모리 저장"
-  - "메모리 검색"
-  - "메모리 목록"
-  - "메모리 삭제"
-  - "메모리 통계"
-  - "메모리 수정"
-  - "메모리 업데이트"
-  - "메모리 조회"
-  - "메모리 내보내기"
-  - "메모리 가져오기"
-  - "메모리 백업"
-  - "메모리 복원"
-  - "메모리 건수"
-  - "메모리 일괄 삭제"
-  - "메모리 고정"
-  - "메모리 핀"
-  - "태그 달아줘"
-  - "태그 추가"
-  - "메모리 연결"
-  - "메모리 링크"
-  - "메모리 요약"
-  - "카테고리 요약"
-  - "메모리 스냅샷"
-  - "옵시디언 동기화"
-  - "재인덱싱"
+  - "memory"
+  - "저장해줘"
+  - "기억해줘"
+  - "찾아줘"
+  - "검색해줘"
+  - "통계"
+  - "백업"
+  - "내보내기"
+  - "복원"
   - "zime-memory"
-  - "zime memory"
-  - "memory update"
-  - "memory export"
-  - "memory import"
-  - "memory count"
-  - "memory backup"
-  - "memory link"
-  - "memory summarize"
-  - "memory reindex"
-  - "obsidian sync"
+  - "메모리 현황"
+  - "목록"
+  - "이미지 저장"
+  - "스크린샷 저장"
+  - "파일 저장"
+  - "문서 보관"
+  - "암호키"
+  - "API 키"
+  - "시크릿"
+  - "비밀번호 저장"
+  - "다운로드"
+  - "파일 다운로드"
 ---
 
-# zime-memory — Qdrant 벡터 메모리 시스템
+# zime-memory v2.0 — Multi-Store 사용 가이드
 
-개인 벡터 메모리 MCP 서버 래퍼 스킬. Qdrant에 텍스트를 임베딩하여 저장하고, 의미 기반 유사도 검색을 수행한다. 도구는 registry.ts에서 자동 관리됨.
+> 자연어 매핑, 카테고리, 우선순위, 기본 동작 규칙은 MCP instructions에서 자동 제공됨.
+> 이 스킬은 **파라미터 상세**, **행동 규칙**, **보안 규칙**, **트러블슈팅**을 보충한다.
 
-## 사용 가능한 명령
+---
 
-| 명령 | 설명 | 예시 |
+## Multi-Store 아키텍처
+
+| Store | 백엔드 | 용도 | 기본값 |
+|-------|--------|------|--------|
+| **general** | Qdrant | 텍스트 메모, 지식, 코드 스니펫 | O (store 미지정 시) |
+| **images** | MinIO + Qdrant | 이미지, 스크린샷, 다이어그램 | |
+| **files** | MinIO + Qdrant | 문서, 설정 파일, 바이너리 | |
+| **secrets** | SQLCipher (AES-256) | API 키, 토큰, 비밀번호 | |
+
+---
+
+## 도구별 파라미터 상세
+
+### memory_save — 메모리 저장
+
+```
+필수: content (general) / filePath 또는 fileData + mimeType + description (images/files) / name + value + secretType (secrets)
+선택: store(general|images|files|secrets), title, tags[], category, priority, source, status(published|draft), ttl, pinned, parentId, relatedIds[]
+```
+
+**store별 추가 파라미터:**
+
+| 파라미터 | general | images | files | secrets |
+|----------|:---:|:---:|:---:|:---:|
+| content | 필수 | - | - | - |
+| filePath / fileData | - | 필수 | 필수 | - |
+| mimeType | - | 필수 | 필수 | - |
+| description | - | 필수 | 필수 | - |
+| originalName | - | 선택 | 선택 | - |
+| resolution {width, height} | - | 선택 | - | - |
+| name | - | - | - | 필수 |
+| value | - | - | - | 필수 |
+| secretType | - | - | - | 필수 (api-key/token/password/certificate/other) |
+| service | - | - | - | 선택 |
+| notes | - | - | - | 선택 |
+
+- 유사도 0.9 이상 기존 메모리 존재 시 `duplicateWarning` 포함 (저장은 진행됨)
+- images/files: MinIO 바이너리 + Qdrant 메타데이터 이중 쓰기
+- secrets: SQLCipher 암호화 저장, Qdrant에 저장되지 않음
+
+### memory_search — 의미 기반 검색
+
+```
+필수: query
+선택: store(general|images|files|secrets|all), limit(1-20, 기본 5), category, tags[], priority, scoreThreshold(0-1, 기본 0.3), status, includeDrafts, fromDate, toDate
+```
+
+- `store: "all"` → 4개 store 크로스 검색 (벡터 + 키워드 병합, score 내림차순)
+- general/images/files: 벡터 유사도 (`matchType: "vector"`)
+- secrets: 키워드 매칭 (`matchType: "keyword"`, `score: null`)
+- **secrets 검색 시 value 필드 미포함** (name/service/tags/notes만 반환)
+
+### memory_list — 목록 조회 (벡터 검색 아님)
+
+```
+선택: store(general|images|files|secrets), category, tags[], priority, limit(1-100, 기본 20), offset, includeDrafts
+```
+
+- 페이지네이션: `offset`으로 이전 결과 이후부터 조회
+- **secrets 목록 시 value 필드 미포함**
+
+### memory_get — 단건 상세 조회
+
+```
+필수: id (UUID)
+선택: store(general|images|files|secrets)
+```
+
+- images/files: `presignedUrl` 포함
+- secrets: **value 필드 포함** (명시적 ID 조회 시만)
+- 관련 메모리(유사도 0.5 이상) 최대 3건 추천
+
+### memory_update — 메모리 수정
+
+```
+필수: id (UUID) + 최소 1개 변경 필드
+선택: store, content, title, tags[], category, priority, source, status, ttl, pinned, parentId, relatedIds[]
+```
+
+- `content` 또는 `title` 변경 시 임베딩 재생성
+- `createdAt`은 유지, `updatedAt`만 갱신
+- `status`를 `published`로 변경 시 `expiresAt` 자동 제거
+
+### memory_delete — 단건 삭제
+
+```
+필수: id (UUID)
+선택: store(general|images|files|secrets)
+```
+
+- images/files: MinIO 오브젝트 + Qdrant 포인트 동시 삭제
+
+### memory_count — 건수 조회
+
+```
+선택: store(general|images|files|secrets|all), category, tags[], priority
+```
+
+- `store: "all"` → store별 분류 카운트 반환
+
+### memory_stats — 전체 통계
+
+```
+파라미터 없음 (항상 4 store 통합)
+```
+
+- general: `pointsCount`, `status`
+- images: `objectCount`, `totalSize`
+- files: `objectCount`, `totalSize`
+- secrets: `total`, `breakdown` (secretType별)
+
+### memory_download — 파일 다운로드
+
+```
+필수: id (UUID)
+선택: store(images|files), urlOnly (boolean)
+```
+
+- `urlOnly: true` → presigned URL만 반환 (1시간 유효)
+- `urlOnly: false` → base64 인코딩 반환
+- images/files store 전용
+
+### memory_export — 내보내기
+
+```
+선택: store(general|images|files|secrets), category, priority, tags[]
+```
+
+- JSON 배열 형태로 전체 또는 필터링된 메모리 반환
+- secrets export 시 value 제외 옵션 있음
+
+### memory_import — 가져오기
+
+```
+필수: memories (배열)
+선택: store(general|images|files), skipDuplicates (기본 true)
+```
+
+- `id` 지정 시 원본 ID 보존
+- **secrets import 미지원** (보안)
+
+### memory_bulk_delete — 일괄 삭제
+
+```
+최소 1개 필터 필수: category, tags, priority, olderThan
+선택: store(general|images|files)
+```
+
+- 전체 삭제 방지를 위해 필터 없이 호출 불가
+- **secrets bulk_delete 미지원** (안전)
+
+### memory_link — 메모리 관계 설정
+
+```
+필수: sourceId, targetId
+선택: type, bidirectional
+```
+
+- general store 전용 (Qdrant)
+- parentId: 계층 구조, relatedIds: 네트워크 구조
+
+### memory_summarize — 카테고리 요약
+
+```
+필수: category 또는 tags
+선택: limit
+```
+
+- general store 전용 (텍스트)
+- LLM_MODEL 환경변수 설정 필요 (선택사항)
+
+### memory_backup — 통합 백업
+
+```
+선택: unified (boolean), listOnly (boolean)
+```
+
+- `unified: true` → Qdrant + MinIO + SQLCipher 3개 store 통합 백업
+- `listOnly: true` → 기존 스냅샷 목록만 조회
+- NAS_BACKUP_PATH 설정 시 NAS 복사 포함
+- 자동 프루닝: 오래된 백업은 자동 삭제 (Qdrant/NAS/로컬 각각 최대 20개 유지)
+- MAX_QDRANT_SNAPSHOTS(기본 20), MAX_NAS_BACKUPS(기본 20) 환경변수로 보관 수 조정 가능
+
+### memory_migrate — 마이그레이션
+
+```
+필수: mode (analyze | tag-store)
+선택: confirm
+```
+
+- `analyze`: 기존 데이터의 store 태그 현황 분석
+- `tag-store`: store 태그 없는 데이터에 general 태그 부여
+
+### memory_reindex — 재인덱싱
+
+```
+필수: confirm ("CONFIRM")
+```
+
+- general store 전용 (Qdrant)
+- 임베딩 모델 변경 시 전체 벡터 재생성
+
+### memory_obsidian_sync — Obsidian 동기화
+
+```
+필수: direction (import | export | bidirectional)
+선택: vaultPath, folder
+```
+
+- general store 전용 (텍스트)
+- YAML frontmatter로 메타데이터 매핑
+
+---
+
+## store별 도구 지원 범위
+
+```
+                  general  images  files  secrets  all
+save/get/update     O        O       O      O      -
+delete              O        O       O      O      -
+search              O        O       O      O      O
+list/count          O        O       O      O      O
+export              O        O       O      O      -
+import              O        O       O      X      -
+bulk_delete         O        O       O      X      -
+download            -        O       O      -      -
+link/summarize      O        -       -      -      -
+reindex             O        -       -      -      -
+obsidian_sync       O        -       -      -      -
+```
+
+---
+
+## 보안 규칙 (secrets store)
+
+1. **search/list 응답에 value 미포함** — name, secretType, service, tags, notes만 반환
+2. **get 응답에 value 포함** — 명시적 ID 조회 시만 전체 필드 반환 (의도적)
+3. **SQLCipher 전체 DB 암호화** — ZIME_ENCRYPTION_KEY (hex 64자) 필수
+4. **import/bulk_delete 미지원** — 시크릿은 개별 저장/삭제만 허용
+5. **파일 크기 50MB 제한** — images/files store maxFileSize 초과 시 에러
+6. **MinIO Object Lock** — GOVERNANCE 모드 30일, 보존 기간 내 삭제 방지
+
+---
+
+## 주요 규칙
+
+1. **저장 시**: 사용자가 카테고리/우선순위를 명시하지 않으면 내용을 보고 적절히 추론하여 지정
+2. **저장 시**: 사용자가 태그를 명시하지 않으면 내용을 분석하여 적절한 태그를 생성하여 제공
+3. **저장 시**: store를 명시하지 않으면 내용에 따라 적절한 store 판단 (키/토큰 → secrets, 이미지 → images, 파일 → files, 텍스트 → general)
+4. **검색 시**: 결과가 없으면 `scoreThreshold`를 낮춰서 재시도 제안
+5. **삭제 시**: 삭제 전 해당 메모리 내용을 먼저 보여주고 확인 요청
+6. **목록 시**: 20건 이상이면 카테고리별 건수를 먼저 보여주고 필터링 제안
+7. **결과 표시**: 검색/목록 결과는 테이블 형태로 보기 좋게 정리
+
+---
+
+## 트러블슈팅
+
+| 증상 | 원인 | 해결 |
 |------|------|------|
-| `save` | 메모리 저장 (중복감지 포함) | `/zime-memory save "내용"` |
-| `search` | 의미 기반 검색 | `/zime-memory search "쿼리"` |
-| `get` | ID로 단건 전체 조회 | `/zime-memory get {uuid}` |
-| `update` | 기존 메모리 수정 | `/zime-memory update {uuid} --title "새제목"` |
-| `list` | 목록 조회 (필터) | `/zime-memory list` |
-| `count` | 건수 조회 (그룹별) | `/zime-memory count --groupBy category` |
-| `delete` | ID로 삭제 | `/zime-memory delete {uuid}` |
-| `bulk-delete` | 필터 일괄 삭제 | `/zime-memory bulk-delete --category note` |
-| `export` | 전체 JSON 내보내기 | `/zime-memory export` |
-| `import` | JSON에서 일괄 복원 | `/zime-memory import` |
-| `stats` | 컬렉션 통계 | `/zime-memory stats` |
-| `link` | 메모리 간 관계 설정 | `/zime-memory link {sourceId} {targetId}` |
-| `summarize` | 카테고리별 LLM 요약 | `/zime-memory summarize --category knowledge` |
-| `backup` | Qdrant 스냅샷 백업 | `/zime-memory backup` |
-| `obsidian-sync` | Obsidian 양방향 동기화 | `/zime-memory obsidian-sync --direction export` |
-| `reindex` | 임베딩 모델 변경 재인덱싱 | `/zime-memory reindex` |
-
-## MCP 도구 매핑
-
-이 스킬은 다음 MCP 도구를 호출한다:
-
-| 명령 | MCP 도구 |
-|------|----------|
-| save | `mcp__zime-memory__memory_save` |
-| search | `mcp__zime-memory__memory_search` |
-| get | `mcp__zime-memory__memory_get` |
-| update | `mcp__zime-memory__memory_update` |
-| list | `mcp__zime-memory__memory_list` |
-| count | `mcp__zime-memory__memory_count` |
-| delete | `mcp__zime-memory__memory_delete` |
-| bulk-delete | `mcp__zime-memory__memory_bulk_delete` |
-| export | `mcp__zime-memory__memory_export` |
-| import | `mcp__zime-memory__memory_import` |
-| stats | `mcp__zime-memory__memory_stats` |
-| link | `mcp__zime-memory__memory_link` |
-| summarize | `mcp__zime-memory__memory_summarize` |
-| backup | `mcp__zime-memory__memory_backup` |
-| obsidian-sync | `mcp__zime-memory__memory_obsidian_sync` |
-| reindex | `mcp__zime-memory__memory_reindex` |
-
-## 파라미터 레퍼런스
-
-### save
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `content` | O | string | 저장할 텍스트 내용 |
-| `title` | X | string | 메모리 제목 |
-| `category` | X | enum | `note`, `knowledge`, `reference`, `snippet`, `decision`, `custom` (기본: `note`) |
-| `tags` | X | string[] | 태그 목록 |
-| `priority` | X | enum | `low`, `medium`, `high`, `critical` (기본: `medium`) |
-| `source` | X | string | 출처 정보 |
-| `pinned` | X | boolean | 메모리 고정 여부 (기본: `false`) |
-| `parentId` | X | uuid | 상위 메모리 ID (계층 구조) |
-| `relatedIds` | X | uuid[] | 연결 메모리 ID 목록 |
-| `status` | X | enum | `published`, `draft` (기본: `published`) |
-| `ttl` | X | string | draft 자동 만료 기간 (예: `"3d"`, `"12h"`) |
-
-유사도 0.9 이상인 기존 메모리가 있으면 `duplicateWarning` 필드가 응답에 포함된다 (저장은 정상 진행).
-태그는 Claude가 내용을 분석하여 tags 파라미터로 직접 제공한다.
-
-### search
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `query` | O | string | 검색 쿼리 (자연어) |
-| `category` | X | enum | 카테고리 필터 |
-| `tags` | X | string[] | 태그 필터 |
-| `priority` | X | enum | 우선순위 필터 |
-| `limit` | X | int | 결과 수 (1-20, 기본: 5) |
-| `scoreThreshold` | X | float | 유사도 임계값 (0-1, 기본: 0.3) |
-
-### get
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `id` | O | uuid | 조회할 메모리 ID |
-
-내용을 잘라내지 않고 전체 페이로드를 반환한다.
-
-### update
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `id` | O | uuid | 수정할 메모리 ID |
-| `content` | X | string | 수정할 내용 |
-| `title` | X | string | 수정할 제목 |
-| `tags` | X | string[] | 수정할 태그 목록 |
-| `category` | X | enum | 수정할 카테고리 |
-| `priority` | X | enum | 수정할 우선순위 |
-| `source` | X | string | 수정할 출처 |
-
-| `pinned` | X | boolean | 고정 여부 |
-| `parentId` | X | uuid | 상위 메모리 ID |
-| `relatedIds` | X | uuid[] | 연결 메모리 ID 목록 |
-| `status` | X | enum | `published`, `draft` |
-| `ttl` | X | string | draft 자동 만료 기간 |
-
-id 외에 최소 하나의 수정 필드가 필요하다. content/title 변경 시 임베딩이 재생성된다.
-createdAt은 유지되고 updatedAt만 갱신된다. status를 published로 변경하면 expiresAt이 제거된다.
-
-### list
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `category` | X | enum | 카테고리 필터 |
-| `tags` | X | string[] | 태그 필터 |
-| `priority` | X | enum | 우선순위 필터 |
-| `limit` | X | int | 결과 수 (1-100, 기본: 20) |
-| `offset` | X | string | 페이지네이션 오프셋 |
-
-### count
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `groupBy` | X | enum | `category`, `priority`, `tags` (생략 시 총 건수만 반환) |
-
-groupBy 지정 시 항목별 breakdown 객체를 반환한다.
-
-### delete
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `id` | O | uuid | 삭제할 메모리 ID |
-
-### bulk-delete
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `category` | X | enum | 카테고리 필터 |
-| `tags` | X | string[] | 태그 필터 (OR 조건) |
-| `priority` | X | enum | 우선순위 필터 |
-
-최소 하나의 필터 조건이 필요하다 (전체 삭제 방지). 삭제 전 매칭 건수를 먼저 조회하여 응답에 포함한다.
-
-### export
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `category` | X | enum | 카테고리 필터 |
-| `tags` | X | string[] | 태그 필터 |
-| `priority` | X | enum | 우선순위 필터 |
-
-필터 없으면 전체 메모리를 JSON으로 내보낸다. 내용을 잘라내지 않고 전체를 포함한다.
-
-### import
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `memories` | O | array | 가져올 메모리 배열 (각 항목: content 필수, title/tags/category/priority/source/id/createdAt 선택) |
-| `skipDuplicates` | X | boolean | 동일 ID 존재 시 건너뛰기 (기본: `true`) |
-
-각 메모리에 대해 임베딩을 자동 생성한다. id를 지정하면 원본 ID를 보존한다.
-
-### stats
-
-파라미터 없음.
-
-## 실행 규칙
-
-1. **인수 파싱**: 사용자 입력에서 명령과 내용을 분리한다
-   - `/zime-memory save "내용"` → save 명령 + content
-   - `/zime-memory search NAS 설정` → search 명령 + query
-   - `/zime-memory` (인수 없음) → stats 실행
-   - `/zime-memory list knowledge` → list 명령 + category=knowledge
-   - `/zime-memory count category` → count 명령 + groupBy=category
-   - `/zime-memory get {uuid}` → get 명령 + id
-   - `/zime-memory update {uuid} --title "제목"` → update 명령 + id + title
-
-2. **MCP 도구 호출**: 파싱된 명령에 해당하는 MCP 도구를 호출한다
-
-3. **결과 포맷팅**: MCP 응답을 테이블 형식으로 정리하여 출력한다
-
-4. **자연어 지원**: 명시적 명령어 없이도 의도를 파악한다
-   - "이거 기억해줘: ..." → save
-   - "~에 대해 기억나?" → search
-   - "이거 자세히 보여줘" / "전문 보여줘" → get
-   - "이거 수정해줘" / "내용 바꿔줘" → update
-   - "저장된 거 보여줘" → list
-   - "몇 개야?" / "건수" → count
-   - "메모리 현황" → stats
-   - "메모리 백업" / "내보내기" → export
-   - "메모리 복원" / "가져오기" → import
-   - "전부 삭제" / "일괄 삭제" → bulk-delete
-
-## 카테고리 가이드
-
-| 카테고리 | 용도 | 예시 |
-|----------|------|------|
-| `note` | 일반 메모 | 회의 내용, 아이디어 |
-| `knowledge` | 학습/지식 | 기술 정보, 개념 정리 |
-| `reference` | 참조 정보 | URL, 문서 위치, 설정값 |
-| `snippet` | 코드 조각 | 자주 쓰는 명령어, 코드 패턴 |
-| `decision` | 의사결정 | 기술 선택 이유, 아키텍처 결정 |
-| `custom` | 기타 | 분류 불가 항목 |
-
-## 신규 도구 파라미터 레퍼런스
-
-### link
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `sourceId` | O | uuid | 관계 출발점 메모리 ID |
-| `targetId` | O | uuid | 관계 도착점 메모리 ID |
-| `bidirectional` | X | boolean | 양방향 관계 여부 (기본: `true`) |
-
-두 메모리의 `relatedIds`에 서로를 추가한다. 자기 자신과의 연결은 불가.
-
-### summarize
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `category` | X | enum | 요약 대상 카테고리 |
-| `tags` | X | string[] | 요약 대상 태그 (OR 조건) |
-| `limit` | X | int | 요약할 최대 메모리 수 (1-50, 기본: 20) |
-
-LLM이 메모리들을 종합하여 핵심 주제와 인사이트를 요약한다.
-
-### backup
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `copyToNas` | X | boolean | NAS에 스냅샷 복사 여부 (기본: `false`) |
-| `listOnly` | X | boolean | 스냅샷 목록만 조회 (기본: `false`) |
-
-Qdrant 스냅샷을 생성하고, NAS_BACKUP_PATH 설정 시 NAS에 복사할 수 있다.
-자동 백업(6시간 간격) 시 오래된 스냅샷은 자동 프루닝된다 (Qdrant/NAS/로컬 각각 최대 20개 유지).
-
-#### 백업 관련 환경 변수
-
-| 환경 변수 | 기본값 | 설명 |
-|----------|--------|------|
-| `BACKUP_INTERVAL_HOURS` | `6` | 자동 백업 주기 (시간) |
-| `NAS_BACKUP_PATH` | - | NAS 백업 경로 (미설정 시 NAS 복사 비활성) |
-| `MAX_QDRANT_SNAPSHOTS` | `20` | Qdrant 서버 스냅샷 최대 보관 수 |
-| `MAX_NAS_BACKUPS` | `20` | NAS 디렉토리별 백업 최대 보관 수 |
-| `DISABLE_LOCAL_BACKUP` | - | `true` 설정 시 로컬 안전 백업 비활성 |
-
-### obsidian-sync
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `vaultPath` | X | string | Obsidian vault 경로 (미지정 시 환경변수 사용) |
-| `folder` | X | string | vault 내 하위 폴더 (기본: `"zime-memory"`) |
-| `direction` | O | enum | `import`, `export`, `bidirectional` |
-
-YAML frontmatter로 zime-id, category, priority, tags를 매핑한다.
-bidirectional은 updatedAt 비교로 최신 쪽 우선.
-
-### reindex
-
-| 파라미터 | 필수 | 타입 | 설명 |
-|----------|------|------|------|
-| `confirm` | O | literal | `"CONFIRM"` 입력 필수 (실수 방지) |
-
-EMBEDDING_MODEL 변경 후 전체 메모리의 벡터를 재생성한다.
+| MCP 도구 호출 실패 | Qdrant 미실행 | `docker ps`로 Qdrant 컨테이너 확인 |
+| 임베딩 실패 | Ollama 미실행 | `ollama serve` 또는 Ollama 앱 실행 확인 |
+| 검색 결과 없음 | 임계값 너무 높음 | `scoreThreshold`를 0.2로 낮춰 재시도 |
+| 느린 검색 | 세그먼트 과다 | Qdrant 컬렉션 최적화 필요 |
+| 이미지/파일 저장 실패 | MinIO 미실행 | `curl http://localhost:9000/minio/health/live` 확인 |
+| 이미지/파일 저장 실패 | MinIO 크레덴셜 미설정 | MINIO_ACCESS_KEY, MINIO_SECRET_KEY 환경변수 확인 |
+| 시크릿 저장 실패 | SQLCipher 암호키 미설정 | ZIME_ENCRYPTION_KEY (hex 64자) 환경변수 확인 |
+| 파일 크기 초과 에러 | 50MB 제한 | 대용량 파일은 NAS 직접 저장 권장 |
+| presignedUrl 만료 | 1시간 유효기간 | memory_download로 새 URL 재발급 |
