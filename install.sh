@@ -24,6 +24,7 @@ SKILL_DIR="$HOME/.claude/skills/zime-memory"
 
 OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"
 DOCKER_COMPOSE=""
+IS_UPGRADE=false
 
 # 색상 (NO_COLOR 환경변수 지원)
 if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
@@ -205,15 +206,36 @@ phase1_check_prerequisites() {
 phase2_setup_source() {
   log_info "Phase 2: 소스 배치"
 
+  # 업그레이드 감지: 기존 설치가 있고 dist/index.js가 존재하면 업그레이드
+  if [ -f "$INSTALL_DIR/dist/index.js" ]; then
+    IS_UPGRADE=true
+    local cur_ver=""
+    if [ -f "$INSTALL_DIR/package.json" ]; then
+      cur_ver=$(jq -r '.version // "unknown"' "$INSTALL_DIR/package.json" 2>/dev/null || echo "unknown")
+    fi
+    local new_ver=""
+    if [ -f "$SCRIPT_DIR/package.json" ]; then
+      new_ver=$(jq -r '.version // "unknown"' "$SCRIPT_DIR/package.json" 2>/dev/null || echo "unknown")
+    fi
+    echo ""
+    log_info "============================================"
+    log_info "  기존 설치 감지 — 업그레이드 모드"
+    log_info "  현재 버전: ${cur_ver}"
+    log_info "  새 버전:   ${new_ver}"
+    log_info "============================================"
+    echo ""
+  fi
+
   if [ "$SCRIPT_DIR" = "$INSTALL_DIR" ]; then
     log_info "이미 설치 위치($INSTALL_DIR)에서 실행 중"
   else
     mkdir -p "$(dirname "$INSTALL_DIR")"
-    if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/package.json" ]; then
-      log_info "기존 설치 발견 — 소스 업데이트"
+    if [ "$IS_UPGRADE" = true ]; then
+      log_info "기존 설치 발견 — 소스 업데이트 (.env 보존)"
     fi
-    # 아카이브에서 풀린 위치 → 설치 디렉토리로 복사
-    cp -R "$SCRIPT_DIR/." "$INSTALL_DIR/"
+    # 아카이브/clone에서 풀린 위치 → 설치 디렉토리로 복사 (.env 제외)
+    rsync -a --exclude='.env' --exclude='data/' --exclude='node_modules/' --exclude='dist/' \
+      "$SCRIPT_DIR/" "$INSTALL_DIR/"
     log_info "소스를 $INSTALL_DIR 에 배치 완료"
   fi
 
@@ -295,6 +317,12 @@ phase3_start_qdrant() {
 phase4_build() {
   log_info "Phase 4: 의존성 설치 및 빌드"
   cd "$INSTALL_DIR"
+
+  # 업그레이드 시 기존 빌드 정리
+  if [ "$IS_UPGRADE" = true ] && [ -d "$INSTALL_DIR/dist" ]; then
+    log_info "기존 빌드 정리 중..."
+    rm -rf "$INSTALL_DIR/dist"
+  fi
 
   log_info "npm install 실행 중..."
   npm install --loglevel=warn
@@ -423,8 +451,17 @@ phase7_install_skill() {
   fi
 
   if [ -n "$skill_src" ]; then
-    cp "$skill_src" "$SKILL_DIR/SKILL.md"
-    log_success "Phase 7 완료: SKILL.md 설치됨 ($SKILL_DIR/)"
+    if [ "$IS_UPGRADE" = true ] && [ -f "$SKILL_DIR/SKILL.md" ]; then
+      if ! diff -q "$skill_src" "$SKILL_DIR/SKILL.md" &>/dev/null; then
+        cp "$skill_src" "$SKILL_DIR/SKILL.md"
+        log_success "Phase 7 완료: SKILL.md 업데이트됨 ($SKILL_DIR/)"
+      else
+        log_info "SKILL.md 변경 없음 — 건너뜀"
+      fi
+    else
+      cp "$skill_src" "$SKILL_DIR/SKILL.md"
+      log_success "Phase 7 완료: SKILL.md 설치됨 ($SKILL_DIR/)"
+    fi
   else
     log_warn "Phase 7: SKILL.md를 찾을 수 없습니다."
     log_warn "수동으로 $SKILL_DIR/SKILL.md 에 복사해주세요."
@@ -506,7 +543,11 @@ phase9_report() {
 
   echo ""
   echo "========================================="
-  echo "  zime-memory 설치 완료"
+  if [ "$IS_UPGRADE" = true ]; then
+    echo "  zime-memory 업그레이드 완료"
+  else
+    echo "  zime-memory 설치 완료"
+  fi
   echo "========================================="
   echo ""
   echo "  설치 위치:      $absolute_install_dir"
