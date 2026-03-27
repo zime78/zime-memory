@@ -4,7 +4,7 @@
  */
 
 import { z } from "zod";
-import { generateEmbedding } from "../services/embeddingService.js";
+import { generateEmbedding, isEmbeddingOff } from "../services/embeddingService.js";
 import { searchMemories } from "../services/qdrantService.js";
 import type { FilterOptions } from "../services/qdrantService.js";
 import { searchQdrant, searchAll } from "../services/storeRouter.js";
@@ -162,10 +162,20 @@ export async function memorySearch(args: MemorySearchInput) {
     return bPinned - aPinned;
   });
 
-  return jsonResponse({
+  const response: Record<string, unknown> = {
     query: args.query,
     store: args.store,
     resultCount: formatted.length,
     results: formatted,
-  } as Record<string, unknown>);
+  };
+
+  // off 모드 시 기능 제한 안내를 추가한다
+  if (isEmbeddingOff()) {
+    response.notice =
+      "임베딩 비활성 상태: 의미 기반 유사도 검색을 사용할 수 없습니다. " +
+      "필터 기반 키워드 매칭 결과만 표시됩니다. " +
+      "EMBEDDING_PROVIDER를 ollama 또는 local로 설정하면 의미 검색이 활성화됩니다.";
+  }
+
+  return jsonResponse(response);
 }

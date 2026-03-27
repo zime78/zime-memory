@@ -53,6 +53,7 @@ store를 지정하지 않으면 `general`로 자동 라우팅된다.
 - "도커 네트워크 관련 메모 찾아줘"
 - 정확한 키워드 불필요, 의미 유사도 기반 검색
 - "Docker 설정" 검색 → "docker compose 네트워크 구성" 결과 반환
+- `EMBEDDING_PROVIDER=off` 시 키워드/필터 기반 검색만 가능 (의미 유사도 비활성)
 
 ### 목록 (memory_list)
 - "저장된 스니펫 목록 보여줘"
@@ -180,13 +181,42 @@ store를 지정하지 않으면 `general`로 자동 라우팅된다.
 - general store 전용
 
 ## 재인덱싱 (memory_reindex)
-- 임베딩 모델 변경 후 "메모리 재인덱싱해줘" → memory_reindex(confirm: "CONFIRM")
-- 전체 메모리의 벡터를 새 모델로 재생성
+- 임베딩 모델 또는 프로바이더 변경 후 "메모리 재인덱싱해줘" → memory_reindex(confirm: "CONFIRM")
+- 전체 메모리의 벡터를 새 프로바이더/모델로 재생성
+- 프로바이더 전환 시 차원 불일치를 자동 감지하고 컬렉션을 재생성 (페이로드 보존)
+- off 모드에서는 재인덱싱 불가 (임베딩 비활성 상태)
 - general store 전용
 
 ## 마이그레이션 (memory_migrate)
 - "마이그레이션 분석" → memory_migrate(mode: "analyze") → store 태그 현황 분석
 - "store 태그 부여" → memory_migrate(mode: "tag-store") → 기존 데이터에 general 태그
+
+---
+
+## 임베딩 프로바이더 설정
+
+`EMBEDDING_PROVIDER` 환경변수로 임베딩 방식을 선택한다:
+
+| 모드 | 설명 | Ollama 필요 | 환경변수 |
+|------|------|:-----------:|----------|
+| `ollama` (기본값) | Ollama REST API로 임베딩 생성 | O | `OLLAMA_URL`, `EMBEDDING_MODEL` |
+| `local` | @huggingface/transformers로 코드 기반 로컬 임베딩 | X | `LOCAL_EMBEDDING_MODEL` |
+| `off` | 임베딩 비활성, 키워드/필터 검색만 | X | - |
+
+### 모드 전환 방법
+1. `.env` 파일에서 `EMBEDDING_PROVIDER` 변경
+2. MCP 서버 재시작
+3. **프로바이더 전환 시 `memory_reindex(confirm: "CONFIRM")` 필수** — 벡터 차원이 다르면 자동 컬렉션 재생성
+
+### local 모드 특징
+- 첫 호출 시 모델을 자동 다운로드 (~90MB, `~/.cache/huggingface/` 캐시)
+- Ollama 서비스 없이 독립 동작
+- 기본 모델: `Xenova/all-MiniLM-L6-v2` (384차원)
+
+### off 모드 제한
+- 의미 기반 유사도 검색 불가
+- `memory_save` 시 중복 감지(유사도 비교) 비활성
+- `memory_search` 결과에 제한 안내 메시지 포함
 
 ---
 
@@ -224,8 +254,10 @@ store를 지정하지 않으면 `general`로 자동 라우팅된다.
 |------|------|--------|------|
 | Qdrant | QDRANT_URL | http://localhost:6333 | 벡터 DB |
 | | COLLECTION_NAME | memories | 컬렉션명 |
-| Ollama | OLLAMA_URL | http://localhost:11434 | 임베딩 서비스 |
-| | EMBEDDING_MODEL | bge-m3 | 임베딩 모델 |
+| 임베딩 | EMBEDDING_PROVIDER | ollama | 프로바이더: ollama, local, off |
+| | LOCAL_EMBEDDING_MODEL | Xenova/all-MiniLM-L6-v2 | local 모드 모델 (384차원) |
+| Ollama | OLLAMA_URL | http://localhost:11434 | 임베딩 서비스 (ollama 모드) |
+| | EMBEDDING_MODEL | bge-m3 | Ollama 임베딩 모델 |
 | | LLM_MODEL | (미설정) | 요약용 LLM |
 | MinIO | MINIO_ENDPOINT | localhost | 오브젝트 스토리지 |
 | | MINIO_PORT | 9000 | 포트 |
