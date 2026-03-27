@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
 # zime-memory 설치 스크립트
-# Qdrant 벡터 DB + Ollama 임베딩(bge-m3) 기반 Claude Code MCP 메모리 서버
+# Qdrant 벡터 DB + 3-Mode 임베딩(ollama/local/off) 기반 Claude Code MCP 메모리 서버
 #
 # 사용법:
 #   GitHub: git clone https://github.com/zime78/zime-memory.git && cd zime-memory && ./install.sh
@@ -259,9 +259,15 @@ phase2_setup_source() {
 QDRANT_URL=http://localhost:6333
 COLLECTION_NAME=memories
 
-# Ollama 임베딩
+# 임베딩 프로바이더: ollama(기본), local(코드 기반), off(비활성)
+EMBEDDING_PROVIDER=ollama
+
+# Ollama 임베딩 (EMBEDDING_PROVIDER=ollama 일 때)
 OLLAMA_URL=http://localhost:11434
 EMBEDDING_MODEL=bge-m3
+
+# 로컬 임베딩 모델 (EMBEDDING_PROVIDER=local 일 때)
+# LOCAL_EMBEDDING_MODEL=Xenova/all-MiniLM-L6-v2
 
 # MinIO 오브젝트 스토리지 (images/files store)
 MINIO_ENDPOINT=localhost
@@ -560,6 +566,7 @@ phase9_report() {
   echo "  설치 위치:      $absolute_install_dir"
   echo "  Qdrant URL:     $QDRANT_URL"
   echo "  Ollama URL:     $OLLAMA_URL"
+  echo "  임베딩 프로바이더: ollama (변경: EMBEDDING_PROVIDER=local|off)"
   echo "  임베딩 모델:     $EMBEDDING_MODEL (1024차원)"
   echo "  컬렉션 이름:     $COLLECTION_NAME"
   echo ""

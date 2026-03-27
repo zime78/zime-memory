@@ -4,7 +4,7 @@
  */
 
 /** MCP 서버 사용 지침 — 자연어 의도 매핑, 카테고리, 동작 규칙 등을 설명한다 */
-export const INSTRUCTIONS: string = `Qdrant 벡터 DB 기반 개인 메모리 시스템. 텍스트를 Ollama 임베딩으로 벡터화하여 저장하고, 의미 기반 유사도 검색을 수행한다.
+export const INSTRUCTIONS: string = `Qdrant 벡터 DB 기반 개인 메모리 시스템. 3-Mode 임베딩(ollama/local/off)으로 텍스트를 벡터화하여 저장하고, 의미 기반 유사도 검색을 수행한다.
 
 ## 자연어 의도 매핑
 - "기억해줘", "저장해줘" → memory_save
@@ -92,5 +92,13 @@ low, medium(기본), high, critical
 - YAML frontmatter로 메타데이터 매핑 (zime-id, category, priority, tags)
 
 ## 재인덱싱
-- memory_reindex: 임베딩 모델 변경 시 전체 벡터 재생성
-- confirm: "CONFIRM" 입력 필수 (실수 방지)`;
+- memory_reindex: 임베딩 모델 또는 프로바이더 변경 시 전체 벡터 재생성
+- confirm: "CONFIRM" 입력 필수 (실수 방지)
+- 프로바이더 전환(ollama↔local) 시 차원 불일치 자동 감지 및 컬렉션 재생성
+- EMBEDDING_PROVIDER=off 상태에서는 재인덱싱 불가
+
+## 임베딩 프로바이더
+- EMBEDDING_PROVIDER=ollama (기본): Ollama REST API로 임베딩 생성 (bge-m3, 1024차원)
+- EMBEDDING_PROVIDER=local: @huggingface/transformers 로컬 임베딩 (Ollama 불필요, 384차원)
+- EMBEDDING_PROVIDER=off: 임베딩 비활성, 키워드/필터 검색만 가능 (의미 유사도 검색 불가)
+- 프로바이더 전환 후 반드시 memory_reindex 실행 필요`;
