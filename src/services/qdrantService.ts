@@ -5,6 +5,7 @@
 
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { config } from "../config.js";
+import { getEmbeddingDimensions } from "./embeddingService.js";
 import { info, error as logError } from "../utils/logger.js";
 import type { MemoryPayload } from "../types/index.js";
 
@@ -138,7 +139,7 @@ export async function ensureCollection(): Promise<void> {
       info(`컬렉션 "${name}" 생성 중...`);
       await client.createCollection(name, {
         vectors: {
-          size: config.ollama.dimensions,
+          size: getEmbeddingDimensions(),
           distance: "Cosine",
         },
       });
@@ -197,9 +198,9 @@ export async function ensureCollection(): Promise<void> {
           ? (vectorsParam as { size?: number }).size
           : undefined;
 
-      if (existingSize !== undefined && existingSize !== config.ollama.dimensions) {
+      if (existingSize !== undefined && existingSize !== getEmbeddingDimensions()) {
         info(
-          `경고: 컬렉션 벡터 차원(${existingSize})과 현재 모델 차원(${config.ollama.dimensions})이 다릅니다. memory_reindex를 실행하세요.`
+          `경고: 컬렉션 벡터 차원(${existingSize})과 현재 모델 차원(${getEmbeddingDimensions()})이 다릅니다. memory_reindex를 실행하세요.`
         );
       } else {
         info(`컬렉션 "${name}" 이미 존재함`);
