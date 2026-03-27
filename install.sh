@@ -241,11 +241,18 @@ phase2_setup_source() {
 
   # .env 생성 (없을 때만) — Multi-Store 전체 설정 포함
   if [ ! -f "$INSTALL_DIR/.env" ]; then
-    # 보안 키 자동 생성
-    local minio_password
-    minio_password="$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
-    local encryption_key
-    encryption_key="$(openssl rand -hex 32)"
+    # 보안 키 자동 생성 (openssl 또는 Node.js fallback)
+    local minio_password encryption_key
+    if command -v openssl &>/dev/null; then
+      minio_password="$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
+      encryption_key="$(openssl rand -hex 32)"
+    elif command -v node &>/dev/null; then
+      minio_password="$(node -e "console.log(require('crypto').randomBytes(18).toString('base64url').slice(0,24))")"
+      encryption_key="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+    else
+      log_error "openssl 또는 Node.js가 필요합니다 (키 생성용)"
+      exit 1
+    fi
 
     cat > "$INSTALL_DIR/.env" << ENVEOF
 # Qdrant 벡터 DB
