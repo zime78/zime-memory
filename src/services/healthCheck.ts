@@ -9,6 +9,7 @@ import { config } from "../config.js";
 import { info, warn, error as logError } from "../utils/logger.js";
 import { checkMinioHealth } from "./minioService.js";
 import { checkSqlcipherHealth } from "./sqlcipherService.js";
+import { getProvider } from "./embeddingService.js";
 
 /** 재시도 설정 */
 const MAX_RETRIES = 3;
@@ -103,25 +104,47 @@ export async function checkHealth(): Promise<{
   let lastQdrantResult = { ok: false, message: "" };
   let lastOllamaResult = { ok: false, message: "" };
 
+  // 임베딩 프로바이더에 따라 Ollama 헬스체크를 조건부 실행한다
+  const embeddingProvider = config.embedding.provider;
+  const needsOllamaCheck = embeddingProvider === "ollama";
+
+  if (!needsOllamaCheck) {
+    if (embeddingProvider === "off") {
+      lastOllamaResult = { ok: true, message: "임베딩 비활성 (off 모드)" };
+    } else if (embeddingProvider === "local") {
+      // local 모드: @huggingface/transformers 모듈 존재 여부 확인
+      try {
+        const provider = await getProvider();
+        const available = await provider.isAvailable();
+        lastOllamaResult = available
+          ? { ok: true, message: `로컬 임베딩 (${config.embedding.localModel})` }
+          : { ok: false, message: "@huggingface/transformers 패키지 미설치" };
+      } catch {
+        lastOllamaResult = { ok: false, message: "로컬 임베딩 프로바이더 초기화 실패" };
+      }
+    }
+  }
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     info(`헬스 체크 시도 ${attempt}/${MAX_RETRIES}...`);
 
-    const [qdrantResult, ollamaResult] = await Promise.all([
-      checkQdrant(),
-      checkOllama(),
-    ]);
+    const checks: Promise<{ ok: boolean; message: string }>[] = [checkQdrant()];
+    if (needsOllamaCheck) checks.push(checkOllama());
+
+    const [qdrantResult, ollamaResult] = await Promise.all(checks);
 
     lastQdrantResult = qdrantResult;
-    lastOllamaResult = ollamaResult;
+    if (ollamaResult) lastOllamaResult = ollamaResult;
 
-    if (qdrantResult.ok && ollamaResult.ok) {
+    const allOk = lastQdrantResult.ok && lastOllamaResult.ok;
+    if (allOk) {
       info("모든 서비스 정상 연결 확인");
       break;
     }
 
     if (attempt < MAX_RETRIES) {
-      if (!qdrantResult.ok) warn(`Qdrant: ${qdrantResult.message}`);
-      if (!ollamaResult.ok) warn(`Ollama: ${ollamaResult.message}`);
+      if (!lastQdrantResult.ok) warn(`Qdrant: ${lastQdrantResult.message}`);
+      if (needsOllamaCheck && !lastOllamaResult.ok) warn(`Ollama: ${lastOllamaResult.message}`);
       warn(`${RETRY_DELAY_MS}ms 후 재시도합니다...`);
       await sleep(RETRY_DELAY_MS);
     }
@@ -131,7 +154,7 @@ export async function checkHealth(): Promise<{
   if (!lastQdrantResult.ok) {
     logError(`Qdrant 연결 실패: ${lastQdrantResult.message}`);
   }
-  if (!lastOllamaResult.ok) {
+  if (needsOllamaCheck && !lastOllamaResult.ok) {
     logError(`Ollama 연결 실패: ${lastOllamaResult.message}`);
   }
 

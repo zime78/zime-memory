@@ -3,7 +3,7 @@ name: zime-memory
 description: |
   Qdrant + MinIO + SQLCipher 기반 Multi-Store 개인 메모리 시스템.
   텍스트(general), 이미지(images), 파일(files), 시크릿(secrets) 4개 store를 지원한다.
-  Ollama 임베딩으로 벡터화하여 의미 기반 유사도 검색을 수행한다.
+  3-Mode 임베딩(ollama/local/off)으로 벡터화하여 의미 기반 유사도 검색을 수행한다.
   '메모리', '기억', 'memory', '저장해줘', '찾아줘', '검색', '이미지 저장', '파일 저장', '암호키', '시크릿', '다운로드' 요청 시 사용합니다.
 triggers:
   - "메모리"
@@ -300,11 +300,29 @@ obsidian_sync       O        -       -      -      -
 | 증상 | 원인 | 해결 |
 |------|------|------|
 | MCP 도구 호출 실패 | Qdrant 미실행 | `docker ps`로 Qdrant 컨테이너 확인 |
-| 임베딩 실패 | Ollama 미실행 | `ollama serve` 또는 Ollama 앱 실행 확인 |
+| 임베딩 실패 (ollama 모드) | Ollama 미실행 | `ollama serve` 또는 Ollama 앱 실행 확인 |
+| 임베딩 실패 (local 모드) | 모델 미다운로드 | 첫 실행 시 자동 다운로드, 네트워크 확인 |
 | 검색 결과 없음 | 임계값 너무 높음 | `scoreThreshold`를 0.2로 낮춰 재시도 |
+| 검색 시 의미 매칭 안됨 | EMBEDDING_PROVIDER=off | ollama 또는 local로 변경 후 reindex |
+| 차원 불일치 에러 | 프로바이더 전환 | `memory_reindex(confirm: "CONFIRM")` 실행 |
 | 느린 검색 | 세그먼트 과다 | Qdrant 컬렉션 최적화 필요 |
 | 이미지/파일 저장 실패 | MinIO 미실행 | `curl http://localhost:9000/minio/health/live` 확인 |
 | 이미지/파일 저장 실패 | MinIO 크레덴셜 미설정 | MINIO_ACCESS_KEY, MINIO_SECRET_KEY 환경변수 확인 |
 | 시크릿 저장 실패 | SQLCipher 암호키 미설정 | ZIME_ENCRYPTION_KEY (hex 64자) 환경변수 확인 |
 | 파일 크기 초과 에러 | 50MB 제한 | 대용량 파일은 NAS 직접 저장 권장 |
 | presignedUrl 만료 | 1시간 유효기간 | memory_download로 새 URL 재발급 |
+
+---
+
+## 임베딩 프로바이더 설정
+
+`EMBEDDING_PROVIDER` 환경변수로 임베딩 방식을 선택:
+
+| 모드 | 설명 | Ollama 필요 |
+|------|------|:-----------:|
+| `ollama` (기본) | Ollama REST API (bge-m3, 1024차원) | O |
+| `local` | @huggingface/transformers 로컬 임베딩 (384차원) | X |
+| `off` | 임베딩 비활성, 키워드/필터 검색만 | X |
+
+- **프로바이더 전환 시 `memory_reindex` 필수** (차원 변경 시 컬렉션 자동 재생성)
+- **off 모드 제한**: 의미 검색 불가, 중복 감지 비활성, 검색 결과에 제한 안내 포함

@@ -28,11 +28,19 @@ import { toolRegistry } from "./tools/registry.js";
 
 async function main() {
   try {
-    // 헬스 체크: Qdrant, Ollama 연결 확인
+    // 임베딩 프로바이더 모드 표시
+    info(`임베딩 프로바이더: ${config.embedding.provider}`);
+    if (config.embedding.provider === "off") {
+      warn("임베딩이 비활성화되었습니다. 의미 기반 검색을 사용할 수 없습니다.");
+    } else if (config.embedding.provider === "local") {
+      info(`로컬 임베딩 모델: ${config.embedding.localModel}`);
+    }
+
+    // 헬스 체크: Qdrant, Ollama/Provider 연결 확인
     info("서비스 헬스 체크 시작...");
     const health = await checkHealth();
     info(`Qdrant: ${health.qdrant}`);
-    info(`Ollama: ${health.ollama}`);
+    info(`임베딩: ${health.ollama}`);
     info(`MinIO: ${health.minio}`);
     info(`SQLCipher: ${health.sqlcipher}`);
 

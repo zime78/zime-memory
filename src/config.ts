@@ -22,9 +22,21 @@ const envSchema = z.object({
   COLLECTION_NAME: z.string().optional().default("memories"),
   QDRANT_API_KEY: z.string().optional(),
 
+  /** 임베딩 프로바이더 선택: ollama(기본), local(코드 기반), off(비활성) */
+  EMBEDDING_PROVIDER: z
+    .enum(["ollama", "local", "off"])
+    .optional()
+    .default("ollama"),
+
   /** Ollama 임베딩 */
   OLLAMA_URL: z.string().optional().default("http://localhost:11434"),
   EMBEDDING_MODEL: z.string().optional().default("bge-m3"),
+
+  /** 로컬 임베딩 모델 (local 모드 전용) */
+  LOCAL_EMBEDDING_MODEL: z
+    .string()
+    .optional()
+    .default("Xenova/all-MiniLM-L6-v2"),
 
   /** Ollama LLM (선택, 요약 기능에만 사용) */
   LLM_MODEL: z.string().optional().default(""),
@@ -76,6 +88,14 @@ export const config = {
     model: embeddingModel,
     /** 현재 모델의 벡터 차원 수 (매핑에 없으면 1024 기본값) */
     dimensions: embeddingModels[embeddingModel] ?? 1024,
+  },
+
+  /** 임베딩 프로바이더 설정 */
+  embedding: {
+    /** 프로바이더 종류: "ollama" | "local" | "off" */
+    provider: env.EMBEDDING_PROVIDER as "ollama" | "local" | "off",
+    /** 로컬 임베딩 모델 (local 모드 전용) */
+    localModel: env.LOCAL_EMBEDDING_MODEL,
   },
 
   /** Ollama LLM 서비스 설정 (선택사항: 요약 기능에만 사용) */

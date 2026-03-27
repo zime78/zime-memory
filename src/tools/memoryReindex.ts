@@ -3,10 +3,11 @@
  * 임베딩 모델 변경 시 전체 메모리의 벡터를 재생성한다.
  */
 import { z } from "zod";
-import { generateEmbedding } from "../services/embeddingService.js";
-import { scrollMemories, upsertMemory } from "../services/qdrantService.js";
+import { generateEmbedding, isEmbeddingOff, getProvider } from "../services/embeddingService.js";
+import { scrollMemories, upsertMemory, getCollectionDimensions, recreateCollection } from "../services/qdrantService.js";
 import type { MemoryPayload } from "../types/index.js";
-import { jsonResponse } from "../utils/response.js";
+import { jsonResponse, errorResponse } from "../utils/response.js";
+import { info, warn } from "../utils/logger.js";
 
 export const memoryReindexSchema = z.object({
   /** 확인 문구 — "CONFIRM"을 입력해야 실행된다 (실수 방지) */
@@ -23,6 +24,32 @@ export type MemoryReindexInput = z.infer<typeof memoryReindexSchema>;
  * @returns 처리 건수와 실패 건수를 포함한 결과
  */
 export async function memoryReindex(args: MemoryReindexInput) {
+  // off 모드에서는 재인덱싱이 불필요하다
+  if (isEmbeddingOff()) {
+    return errorResponse(
+      "임베딩이 비활성(off) 상태입니다. 재인덱싱을 수행하려면 " +
+        "EMBEDDING_PROVIDER를 ollama 또는 local로 설정하세요."
+    );
+  }
+
+  // 현재 프로바이더의 차원과 컬렉션 차원 비교 — 불일치 시 컬렉션 재생성
+  const provider = await getProvider();
+  const providerDims = provider.dimensions;
+  try {
+    const collectionDims = await getCollectionDimensions();
+
+    if (collectionDims !== undefined && collectionDims !== providerDims) {
+      warn(
+        `[REINDEX] 차원 불일치 감지: 컬렉션=${collectionDims}차원, ` +
+          `프로바이더(${provider.name})=${providerDims}차원. 컬렉션을 재생성합니다.`
+      );
+      await recreateCollection(providerDims);
+      info(`[REINDEX] 컬렉션 재생성 완료 (${providerDims}차원)`);
+    }
+  } catch (err) {
+    warn(`[REINDEX] 차원 확인 실패, 재인덱싱을 계속 진행합니다: ${err}`);
+  }
+
   let processed = 0;
   let failed = 0;
   let offset: string | undefined = undefined;
