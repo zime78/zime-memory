@@ -222,6 +222,91 @@ export async function ensureCollection(): Promise<void> {
 }
 
 /**
+ * 컬렉션의 현재 벡터 차원 수를 반환한다.
+ * 프로바이더 전환 시 차원 불일치 감지에 사용한다.
+ *
+ * @returns 벡터 차원 수 (확인 불가 시 undefined)
+ */
+export async function getCollectionDimensions(): Promise<number | undefined> {
+  const collectionInfo = await client.getCollection(config.qdrant.collectionName);
+  const vectorsParam = collectionInfo.config?.params?.vectors;
+  if (
+    vectorsParam !== null &&
+    typeof vectorsParam === "object" &&
+    !Array.isArray(vectorsParam)
+  ) {
+    return (vectorsParam as { size?: number }).size;
+  }
+  return undefined;
+}
+
+/**
+ * 컬렉션을 삭제하고 새 차원으로 재생성한다.
+ * 프로바이더 전환 시 벡터 차원이 변경될 때 사용한다.
+ * 주의: 기존 데이터가 모두 삭제되므로 재인덱싱과 함께 사용해야 한다.
+ *
+ * @param newDimensions - 새 벡터 차원 수
+ */
+export async function recreateCollection(newDimensions: number): Promise<void> {
+  const name = config.qdrant.collectionName;
+
+  // 기존 데이터를 메모리에 백업 (페이로드만)
+  const allPayloads: Array<{ id: string; payload: Record<string, unknown> }> = [];
+  let offset: string | undefined = undefined;
+  while (true) {
+    const batch = await client.scroll(name, {
+      limit: 100,
+      offset: offset ? offset : undefined,
+      with_payload: true,
+    });
+    for (const point of batch.points) {
+      allPayloads.push({
+        id: String(point.id),
+        payload: point.payload as Record<string, unknown>,
+      });
+    }
+    if (!batch.next_page_offset) break;
+    offset = String(batch.next_page_offset);
+  }
+
+  info(`[RECREATE] ${allPayloads.length}건의 페이로드를 백업 완료`);
+
+  // 컬렉션 삭제 후 새 차원으로 재생성
+  await client.deleteCollection(name);
+  await client.createCollection(name, {
+    vectors: { size: newDimensions, distance: "Cosine" },
+  });
+
+  // 페이로드 인덱스 재생성
+  const indexFields = [
+    "category", "priority", "tags", "status", "expiresAt",
+    "pinned", "parentId", "store", "deletedAt",
+  ];
+  for (const field of indexFields) {
+    await client.createPayloadIndex(name, {
+      field_name: field,
+      field_schema: "keyword",
+    });
+  }
+
+  // 백업한 페이로드를 제로 벡터로 임시 저장 (재인덱싱에서 실제 벡터 생성)
+  const zeroVector = new Array(newDimensions).fill(0);
+  for (let i = 0; i < allPayloads.length; i += 100) {
+    const batch = allPayloads.slice(i, i + 100);
+    await client.upsert(name, {
+      wait: true,
+      points: batch.map((p) => ({
+        id: p.id,
+        vector: zeroVector,
+        payload: p.payload,
+      })),
+    });
+  }
+
+  info(`[RECREATE] 컬렉션 재생성 완료 (${newDimensions}차원, ${allPayloads.length}건 페이로드 복원)`);
+}
+
+/**
  * 메모리를 Qdrant에 저장(upsert)한다.
  *
  * @param id - 메모리 고유 ID (UUID)
@@ -273,6 +358,21 @@ export async function searchMemories(
     payload: Record<string, unknown> | null | undefined;
   }>
 > {
+  // off 모드: 벡터 유사도 검색 대신 scroll+filter 기반 키워드 검색
+  if (config.embedding.provider === "off") {
+    const filter = filterOptions ? buildFilter(filterOptions) : undefined;
+    const scrollResult = await client.scroll(config.qdrant.collectionName, {
+      filter,
+      limit,
+      with_payload: true,
+    });
+    return scrollResult.points.map((p) => ({
+      id: p.id,
+      score: 0,
+      payload: p.payload,
+    }));
+  }
+
   const filter = filterOptions ? buildFilter(filterOptions) : undefined;
 
   const results = await client.search(config.qdrant.collectionName, {

@@ -1,9 +1,10 @@
 # zime-memory Multi-Store 통합 테스트 케이스
 
-> 최종 업데이트: 2026-03-26
+> 최종 업데이트: 2026-03-27
 > 대상 버전: v2.1.0 (Qdrant + MinIO + SQLCipher, 아키텍처 리팩토링)
 > Phase 8-14: memory_update 버그 수정 검증 + 누락 도구 전수 검증
 > Phase 15: 환경변수 Zod 검증 + LOG_LEVEL 테스트 (v2.1.0)
+> Phase 16: 임베딩 프로바이더 3-Mode 테스트 (ollama/local/off)
 
 ## 사전 조건
 
@@ -664,3 +665,88 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
 - **기대**: stderr/stdout에 debug 레벨 로그 출력 (info 레벨에서는 미출력되는 상세 로그 포함)
 - **검증**: `LOG_LEVEL=info` 설정 시 동일 작업에서 debug 로그 미출력 확인
   - `src/services/qdrantService.ts:229-231` — upsertMemory guard에 status 기본값 추가
+
+---
+
+## Phase 16: 임베딩 프로바이더 3-Mode 테스트
+
+> 대상: EMBEDDING_PROVIDER 환경변수 (ollama/local/off) Strategy Pattern
+> 관련 파일: embeddingService.ts, providers/*.ts, config.ts, healthCheck.ts, qdrantService.ts
+
+### T66: ollama 모드 (기본값) — 기존 동작 호환
+- **전제**: `EMBEDDING_PROVIDER=ollama` (또는 미설정), Ollama 서비스 실행 중
+- **실행**: memory_save → memory_search → memory_update(content 변경)
+- **기대**: 기존과 100% 동일한 동작 (벡터 임베딩 생성, 유사도 검색, 임베딩 재생성)
+- **검증**: 검색 결과에 score > 0, 의미 유사도 매칭 정상
+
+### T67: ollama 모드 — 헬스체크
+- **전제**: `EMBEDDING_PROVIDER=ollama`
+- **실행**: 서버 시작
+- **기대**: 시작 로그에 "임베딩 프로바이더: ollama" 출력, Ollama 헬스체크 실행
+- **검증**: stderr에 "Ollama 연결 성공 (모델: bge-m3)" 포함
+
+### T68: local 모드 — 기본 save/search 동작
+- **전제**: `EMBEDDING_PROVIDER=local`, `LOCAL_EMBEDDING_MODEL=Xenova/all-MiniLM-L6-v2`, Ollama 서비스 **미실행**
+- **실행**: memory_save(content: "Docker Compose 네트워크 설정 방법") → memory_search(query: "도커 네트워크")
+- **기대**: 임베딩 생성 성공 (Ollama 없이), 검색 결과에 저장한 메모리 반환
+- **검증**: 검색 결과 score > 0, Ollama 미실행 상태에서도 정상 동작
+
+### T69: local 모드 — 첫 실행 시 모델 다운로드
+- **전제**: `EMBEDDING_PROVIDER=local`, `~/.cache/huggingface/` 에 모델 캐시 없음
+- **실행**: memory_save 첫 호출
+- **기대**: 로그에 "로컬 임베딩 모델 로딩 중: Xenova/all-MiniLM-L6-v2" 출력 후 다운로드 완료
+- **검증**: `~/.cache/huggingface/` 에 모델 파일 캐시됨, 이후 호출 시 다운로드 없이 즉시 응답
+
+### T70: local 모드 — 헬스체크 (Ollama 체크 스킵)
+- **전제**: `EMBEDDING_PROVIDER=local`, Ollama 미실행
+- **실행**: 서버 시작
+- **기대**: 시작 로그에 "임베딩 프로바이더: local" 출력, Ollama 헬스체크 **미실행**
+- **검증**: stderr에 "Ollama" 관련 에러 없음, "로컬 임베딩" 관련 메시지 출력
+
+### T71: off 모드 — save/search 동작
+- **전제**: `EMBEDDING_PROVIDER=off`, Ollama 미실행
+- **실행**: memory_save(content: "테스트 메모") → memory_search(query: "테스트")
+- **기대**: 저장 성공 (제로 벡터), 검색은 필터 기반으로 동작
+- **검증**: 저장 응답에 에러 없음, 검색 결과의 score = 0
+
+### T72: off 모드 — 검색 결과 notice 메시지
+- **전제**: `EMBEDDING_PROVIDER=off`
+- **실행**: memory_search(query: "테스트")
+- **기대**: 응답에 `notice` 필드 포함 ("임베딩 비활성 상태: 의미 기반 유사도 검색을 사용할 수 없습니다")
+- **검증**: notice 문자열에 "EMBEDDING_PROVIDER" 안내 포함
+
+### T73: off 모드 — 헬스체크 (Ollama 체크 스킵)
+- **전제**: `EMBEDDING_PROVIDER=off`, Ollama 미실행
+- **실행**: 서버 시작
+- **기대**: 시작 로그에 "임베딩이 비활성화되었습니다" 경고, Ollama 헬스체크 미실행
+- **검증**: 서버 정상 시작, stderr에 Ollama 연결 에러 없음
+
+### T74: off 모드 — reindex 거부
+- **전제**: `EMBEDDING_PROVIDER=off`
+- **실행**: memory_reindex(confirm: "CONFIRM")
+- **기대**: 에러 응답 — "임베딩이 비활성(off) 상태입니다"
+- **검증**: isError: true, 재인덱싱 미수행
+
+### T75: 프로바이더 전환 — ollama→local 차원 불일치 감지
+- **전제**: `EMBEDDING_PROVIDER=ollama`로 데이터 저장 (1024차원 컬렉션)
+- **실행**: `EMBEDDING_PROVIDER=local`로 변경 후 서버 재시작, memory_reindex(confirm: "CONFIRM")
+- **기대**: 차원 불일치 감지 (1024→384), 컬렉션 자동 재생성, 전체 벡터 재생성
+- **검증**: 로그에 "차원 불일치 감지" + "컬렉션 재생성 완료 (384차원)" 출력, reindex 완료 후 검색 정상
+
+### T76: 프로바이더 전환 — 페이로드 보존
+- **전제**: T75 이후 상태 (ollama→local 전환 + reindex 완료)
+- **실행**: memory_list 또는 memory_get으로 기존 데이터 확인
+- **기대**: 전환 전 저장한 메모리의 content, title, tags, category 등 페이로드 그대로 보존
+- **검증**: 전환 전 저장한 메모리 ID로 get → 동일 데이터 반환
+
+### T77: 잘못된 EMBEDDING_PROVIDER 값
+- **전제**: `EMBEDDING_PROVIDER=invalid` 설정
+- **실행**: 서버 시작
+- **기대**: Zod 검증 에러로 서버 시작 실패
+- **검증**: stderr에 Zod ValidationError, EMBEDDING_PROVIDER 관련 에러 메시지
+
+### T78: local 모드 — @huggingface/transformers 미설치 시
+- **전제**: `EMBEDDING_PROVIDER=local`, node_modules에서 @huggingface/transformers 제거
+- **실행**: memory_save 호출
+- **기대**: 에러 응답 — 패키지 미설치 안내
+- **검증**: 에러 메시지에 "npm install @huggingface/transformers" 포함
