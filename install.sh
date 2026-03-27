@@ -3,7 +3,9 @@
 # zime-memory 설치 스크립트
 # Qdrant 벡터 DB + Ollama 임베딩(bge-m3) 기반 Claude Code MCP 메모리 서버
 #
-# 사용법: tar xzf zime-memory-installer.tar.gz && cd zime-memory && ./install.sh
+# 사용법:
+#   GitHub: git clone https://github.com/zime78/zime-memory.git && cd zime-memory && ./install.sh
+#   아카이브: tar xzf zime-memory-installer.tar.gz && cd zime-memory && ./install.sh
 # ============================================================================
 set -euo pipefail
 
@@ -22,6 +24,7 @@ SKILL_DIR="$HOME/.claude/skills/zime-memory"
 
 OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"
 DOCKER_COMPOSE=""
+IS_UPGRADE=false
 
 # 색상 (NO_COLOR 환경변수 지원)
 if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
@@ -35,6 +38,22 @@ log_success() { printf "${GREEN}[OK]${NC}   %s\n" "$1"; }
 log_warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
 log_error()   { printf "${RED}[ERR]${NC}  %s\n" "$1"; }
 
+# 사용자 확인 프롬프트 (Y/n)
+ask_install() {
+  local tool="$1"
+  local cmd="$2"
+  printf "${YELLOW}[ASK]${NC} %s이(가) 설치되어 있지 않습니다. 설치할까요? [Y/n] " "$tool"
+  read -r answer
+  if [ "${answer:-Y}" = "Y" ] || [ "${answer:-y}" = "y" ] || [ -z "$answer" ]; then
+    log_info "$tool 설치 중..."
+    eval "$cmd"
+    return $?
+  else
+    log_warn "$tool 설치를 건너뛰었습니다."
+    return 1
+  fi
+}
+
 # 임시 파일 정리 트랩
 TMPFILES=()
 cleanup() { for f in "${TMPFILES[@]:-}"; do rm -f "$f"; done; }
@@ -43,87 +62,140 @@ trap cleanup EXIT
 # ── Phase 1: 필수 도구 확인 ──────────────────────────────────────────────────
 
 phase1_check_prerequisites() {
-  log_info "Phase 1: 필수 도구 확인"
-  local missing=()
+  log_info "Phase 1: 필수 도구 확인 및 설치"
+  local failed=false
 
-  # Docker
-  if ! command -v docker &>/dev/null; then
-    if [ "$OS_TYPE" = "darwin" ]; then
-      missing+=("Docker — brew install --cask docker")
-    else
-      missing+=("Docker — https://docs.docker.com/engine/install/")
-    fi
+  # ── macOS: Homebrew 확인 ──
+  if [ "$OS_TYPE" = "darwin" ] && ! command -v brew &>/dev/null; then
+    log_warn "Homebrew가 설치되어 있지 않습니다."
+    log_warn "설치: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    log_error "Homebrew 설치 후 다시 실행해주세요."
+    exit 1
   fi
 
-  # docker compose 감지
+  # ── Docker ──
+  if ! command -v docker &>/dev/null; then
+    if [ "$OS_TYPE" = "darwin" ]; then
+      ask_install "Docker Desktop" "brew install --cask docker" || failed=true
+    else
+      log_warn "Docker가 설치되어 있지 않습니다."
+      log_warn "설치: curl -fsSL https://get.docker.com | sh"
+      log_warn "또는: https://docs.docker.com/engine/install/"
+      failed=true
+    fi
+  else
+    log_success "Docker: $(docker --version | head -1)"
+  fi
+
+  # ── docker compose 감지 ──
   if docker compose version &>/dev/null 2>&1; then
     DOCKER_COMPOSE="docker compose"
   elif command -v docker-compose &>/dev/null; then
     DOCKER_COMPOSE="docker-compose"
   elif command -v docker &>/dev/null; then
-    missing+=("docker compose plugin — Docker Desktop 재설치 또는 apt install docker-compose-plugin")
+    log_warn "docker compose 플러그인이 없습니다."
+    if [ "$OS_TYPE" = "darwin" ]; then
+      log_warn "Docker Desktop을 재설치하면 포함됩니다."
+    else
+      log_warn "설치: sudo apt install docker-compose-plugin"
+    fi
+    failed=true
   fi
 
-  # Node.js >= 18
+  # ── Node.js >= 18 ──
   if command -v node &>/dev/null; then
     NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
     if [ "$NODE_MAJOR" -lt 18 ]; then
-      missing+=("Node.js >= 18 (현재: v$(node -v | sed 's/v//')) — https://nodejs.org/")
+      log_warn "Node.js 버전이 낮습니다 (현재: v$(node -v | sed 's/v//')). >= 18 필요."
+      if [ "$OS_TYPE" = "darwin" ]; then
+        ask_install "Node.js (최신)" "brew upgrade node" || failed=true
+      else
+        log_warn "업그레이드: https://nodejs.org/"
+        failed=true
+      fi
+    else
+      log_success "Node.js: $(node -v)"
     fi
   else
     if [ "$OS_TYPE" = "darwin" ]; then
-      missing+=("Node.js >= 18 — brew install node")
+      ask_install "Node.js" "brew install node" || failed=true
     else
-      missing+=("Node.js >= 18 — https://nodejs.org/")
+      log_warn "Node.js가 설치되어 있지 않습니다."
+      log_warn "설치: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs"
+      failed=true
     fi
   fi
 
-  # Ollama
+  # ── Ollama ──
   if ! command -v ollama &>/dev/null; then
     if [ "$OS_TYPE" = "darwin" ]; then
-      missing+=("Ollama — brew install ollama")
+      ask_install "Ollama" "brew install ollama" || failed=true
     else
-      missing+=("Ollama — curl -fsSL https://ollama.com/install.sh | sh")
+      ask_install "Ollama" "curl -fsSL https://ollama.com/install.sh | sh" || failed=true
     fi
+  else
+    log_success "Ollama: $(ollama --version 2>/dev/null || echo 'installed')"
   fi
 
-  # jq
+  # ── jq ──
   if ! command -v jq &>/dev/null; then
     if [ "$OS_TYPE" = "darwin" ]; then
-      missing+=("jq — brew install jq")
+      ask_install "jq" "brew install jq" || failed=true
     else
-      missing+=("jq — apt install jq")
+      ask_install "jq" "sudo apt install -y jq" || failed=true
     fi
+  else
+    log_success "jq: $(jq --version)"
   fi
 
-  if [ ${#missing[@]} -gt 0 ]; then
-    log_error "다음 도구가 누락되었습니다:"
-    for item in "${missing[@]}"; do
-      printf "  - %s\n" "$item"
-    done
+  # ── 실패한 도구가 있으면 종료 ──
+  if [ "$failed" = true ]; then
+    echo ""
+    log_error "일부 필수 도구가 설치되지 않았습니다."
+    log_error "위 안내에 따라 설치한 후 다시 ./install.sh를 실행해주세요."
     exit 1
   fi
 
-  # Docker 데몬 실행 확인
+  # ── Docker 데몬 실행 확인 ──
   if ! docker info &>/dev/null 2>&1; then
-    log_error "Docker 데몬이 실행되고 있지 않습니다."
+    log_warn "Docker 데몬이 실행되고 있지 않습니다."
     if [ "$OS_TYPE" = "darwin" ]; then
-      log_error "Docker Desktop을 실행해주세요."
+      log_info "Docker Desktop을 실행합니다..."
+      open -a Docker
+      log_info "Docker 시작 대기 중... (최대 60초)"
+      for i in $(seq 1 60); do
+        if docker info &>/dev/null 2>&1; then
+          log_success "Docker 데몬 시작됨"
+          break
+        fi
+        if [ "$i" -eq 60 ]; then
+          log_error "Docker가 60초 내에 시작되지 않았습니다. Docker Desktop을 수동으로 실행해주세요."
+          exit 1
+        fi
+        sleep 1
+      done
     else
       log_error "'sudo systemctl start docker'로 시작해주세요."
+      exit 1
     fi
-    exit 1
   fi
 
-  # Ollama 서비스 확인
+  # ── Ollama 서비스 확인 ──
   if ! curl -sf "$OLLAMA_URL/api/tags" &>/dev/null; then
     log_warn "Ollama 서비스가 응답하지 않습니다."
     if [ "$OS_TYPE" = "darwin" ]; then
-      log_warn "Ollama.app을 실행하거나 'ollama serve'를 실행해주세요."
+      log_info "Ollama 서비스를 시작합니다..."
+      ollama serve &>/dev/null &
+      sleep 3
+      if curl -sf "$OLLAMA_URL/api/tags" &>/dev/null; then
+        log_success "Ollama 서비스 시작됨"
+      else
+        log_warn "Ollama 서비스 시작 실패. Phase 5에서 재시도합니다."
+      fi
     else
       log_warn "'ollama serve &' 또는 'systemctl start ollama'를 실행해주세요."
+      log_warn "Phase 5에서 모델 풀 시 재시도합니다. 계속 진행합니다..."
     fi
-    log_warn "Phase 5에서 모델 풀 시 재시도합니다. 계속 진행합니다..."
   fi
 
   log_success "Phase 1 완료: 필수 도구 확인됨"
@@ -134,27 +206,83 @@ phase1_check_prerequisites() {
 phase2_setup_source() {
   log_info "Phase 2: 소스 배치"
 
+  # 업그레이드 감지: 기존 설치가 있고 dist/index.js가 존재하면 업그레이드
+  if [ -f "$INSTALL_DIR/dist/index.js" ]; then
+    IS_UPGRADE=true
+    local cur_ver=""
+    if [ -f "$INSTALL_DIR/package.json" ]; then
+      cur_ver=$(jq -r '.version // "unknown"' "$INSTALL_DIR/package.json" 2>/dev/null || echo "unknown")
+    fi
+    local new_ver=""
+    if [ -f "$SCRIPT_DIR/package.json" ]; then
+      new_ver=$(jq -r '.version // "unknown"' "$SCRIPT_DIR/package.json" 2>/dev/null || echo "unknown")
+    fi
+    echo ""
+    log_info "============================================"
+    log_info "  기존 설치 감지 — 업그레이드 모드"
+    log_info "  현재 버전: ${cur_ver}"
+    log_info "  새 버전:   ${new_ver}"
+    log_info "============================================"
+    echo ""
+  fi
+
   if [ "$SCRIPT_DIR" = "$INSTALL_DIR" ]; then
     log_info "이미 설치 위치($INSTALL_DIR)에서 실행 중"
   else
     mkdir -p "$(dirname "$INSTALL_DIR")"
-    if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/package.json" ]; then
-      log_info "기존 설치 발견 — 소스 업데이트"
+    if [ "$IS_UPGRADE" = true ]; then
+      log_info "기존 설치 발견 — 소스 업데이트 (.env 보존)"
     fi
-    # 아카이브에서 풀린 위치 → 설치 디렉토리로 복사
-    cp -R "$SCRIPT_DIR/." "$INSTALL_DIR/"
+    # 아카이브/clone에서 풀린 위치 → 설치 디렉토리로 복사 (.env 제외)
+    rsync -a --exclude='.env' --exclude='data/' --exclude='node_modules/' --exclude='dist/' \
+      "$SCRIPT_DIR/" "$INSTALL_DIR/"
     log_info "소스를 $INSTALL_DIR 에 배치 완료"
   fi
 
-  # .env 생성 (없을 때만)
+  # .env 생성 (없을 때만) — Multi-Store 전체 설정 포함
   if [ ! -f "$INSTALL_DIR/.env" ]; then
-    cat > "$INSTALL_DIR/.env" << 'ENVEOF'
+    # 보안 키 자동 생성 (openssl 또는 Node.js fallback)
+    local minio_password encryption_key
+    if command -v openssl &>/dev/null; then
+      minio_password="$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
+      encryption_key="$(openssl rand -hex 32)"
+    elif command -v node &>/dev/null; then
+      minio_password="$(node -e "console.log(require('crypto').randomBytes(18).toString('base64url').slice(0,24))")"
+      encryption_key="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+    else
+      log_error "openssl 또는 Node.js가 필요합니다 (키 생성용)"
+      exit 1
+    fi
+
+    cat > "$INSTALL_DIR/.env" << ENVEOF
+# Qdrant 벡터 DB
 QDRANT_URL=http://localhost:6333
+COLLECTION_NAME=memories
+
+# Ollama 임베딩
 OLLAMA_URL=http://localhost:11434
 EMBEDDING_MODEL=bge-m3
-COLLECTION_NAME=memories
+
+# MinIO 오브젝트 스토리지 (images/files store)
+MINIO_ENDPOINT=localhost
+MINIO_PORT=9000
+MINIO_ACCESS_KEY=zime
+MINIO_SECRET_KEY=${minio_password}
+
+# SQLCipher 암호화 DB (secrets store)
+ZIME_ENCRYPTION_KEY=${encryption_key}
+
+# Docker Compose용 MinIO 크레덴셜
+MINIO_ROOT_USER=zime
+MINIO_ROOT_PASSWORD=${minio_password}
+
+# Obsidian vault 경로 (선택사항)
+# OBSIDIAN_VAULT_PATH=/path/to/your/vault
+
+# NAS 백업 경로 (선택사항)
+# NAS_BACKUP_PATH=/volume1/backups/zime-memory
 ENVEOF
-    log_info ".env 파일 생성됨"
+    log_info ".env 파일 생성됨 (MinIO/SQLCipher 키 자동 생성)"
   else
     log_info ".env 파일 이미 존재 — 건너뜀"
   fi
@@ -196,6 +324,12 @@ phase3_start_qdrant() {
 phase4_build() {
   log_info "Phase 4: 의존성 설치 및 빌드"
   cd "$INSTALL_DIR"
+
+  # 업그레이드 시 기존 빌드 정리
+  if [ "$IS_UPGRADE" = true ] && [ -d "$INSTALL_DIR/dist" ]; then
+    log_info "기존 빌드 정리 중..."
+    rm -rf "$INSTALL_DIR/dist"
+  fi
 
   log_info "npm install 실행 중..."
   npm install --loglevel=warn
@@ -324,8 +458,17 @@ phase7_install_skill() {
   fi
 
   if [ -n "$skill_src" ]; then
-    cp "$skill_src" "$SKILL_DIR/SKILL.md"
-    log_success "Phase 7 완료: SKILL.md 설치됨 ($SKILL_DIR/)"
+    if [ "$IS_UPGRADE" = true ] && [ -f "$SKILL_DIR/SKILL.md" ]; then
+      if ! diff -q "$skill_src" "$SKILL_DIR/SKILL.md" &>/dev/null; then
+        cp "$skill_src" "$SKILL_DIR/SKILL.md"
+        log_success "Phase 7 완료: SKILL.md 업데이트됨 ($SKILL_DIR/)"
+      else
+        log_info "SKILL.md 변경 없음 — 건너뜀"
+      fi
+    else
+      cp "$skill_src" "$SKILL_DIR/SKILL.md"
+      log_success "Phase 7 완료: SKILL.md 설치됨 ($SKILL_DIR/)"
+    fi
   else
     log_warn "Phase 7: SKILL.md를 찾을 수 없습니다."
     log_warn "수동으로 $SKILL_DIR/SKILL.md 에 복사해주세요."
@@ -407,7 +550,11 @@ phase9_report() {
 
   echo ""
   echo "========================================="
-  echo "  zime-memory 설치 완료"
+  if [ "$IS_UPGRADE" = true ]; then
+    echo "  zime-memory 업그레이드 완료"
+  else
+    echo "  zime-memory 설치 완료"
+  fi
   echo "========================================="
   echo ""
   echo "  설치 위치:      $absolute_install_dir"
@@ -433,7 +580,8 @@ main() {
   echo ""
   echo "========================================="
   echo "  zime-memory 설치 시작"
-  echo "  Qdrant + Ollama (bge-m3) MCP 서버"
+  echo "  Multi-Store MCP 메모리 서버"
+  echo "  Qdrant + MinIO + SQLCipher + Ollama"
   echo "========================================="
   echo ""
 
