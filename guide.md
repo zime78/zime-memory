@@ -362,7 +362,19 @@ launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
 | `CACHE_MAX_ENTRIES` | `2000` | 최대 캐시 항목 수 |
 | `CACHE_PRUNE_INTERVAL_HOURS` | `12` | 프루닝 주기 (시간) |
 
-### 트러블슈팅
+### 일반 트러블슈팅
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| Docker 컨테이너 시작 실패 | Docker 미실행 | `docker info` 확인, Docker Desktop 시작 |
+| Qdrant 연결 실패 | 컨테이너 미시작 | `docker compose up -d` |
+| MinIO 연결 실패 | 키 미설정 | `.env`의 `MINIO_ACCESS_KEY/SECRET_KEY` 확인 |
+| SQLCipher 오류 | 키 형식 오류 | `openssl rand -hex 32`로 64자 hex 키 생성 |
+| 임베딩 실패 (ollama) | Ollama 미실행/모델 없음 | `ollama serve` + `ollama pull bge-m3` |
+| 임베딩 실패 (local) | 첫 실행 시 모델 다운로드 | 수 분 대기 (자동 다운로드) |
+| MCP 서버 미등록 | settings.json 누락 | `./install.sh` 재실행 또는 수동 등록 |
+
+### 원격 접속 트러블슈팅
 
 | 증상 | 원인 | 해결 |
 |------|------|------|
