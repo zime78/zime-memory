@@ -23,6 +23,8 @@ import { info, warn, error as logError } from "./utils/logger.js";
 import { initMinio } from "./services/minioService.js";
 import { initSqlcipher, closeSqlcipher, isSqlcipherReady, countSecrets, purgeExpiredDeletes } from "./services/sqlcipherService.js";
 import { validateSqlcipherIntegrity, validateQdrantIntegrity, localBackupSqlcipher, updateSqlcipherWatermark, updateQdrantWatermark } from "./services/safetyService.js";
+import { initCache, closeCache, pruneCache, getCacheStats } from "./services/cacheService.js";
+import { startMonitoring, stopMonitoring, isOnline } from "./services/connectionMonitor.js";
 import { INSTRUCTIONS } from "./instructions.js";
 import { toolRegistry } from "./tools/registry.js";
 
@@ -95,6 +97,13 @@ async function main() {
       } catch (err) {
         logError("[INTEGRITY] SQLCipher 무결성 검증 실패:", err);
       }
+    }
+
+    // ── 읽기 캐시 + 연결 모니터 초기화 ──
+    if (config.cache.enabled) {
+      initCache();
+      startMonitoring();
+      info(`[CACHE] 초기화 완료 (현재: ${isOnline() ? "온라인" : "오프라인"})`);
     }
 
     // TTL 자동 만료 스케줄러: 5분마다 만료된 draft 메모리를 정리한다
@@ -178,12 +187,30 @@ async function main() {
       }
     }, PURGE_INTERVAL_MS);
 
+    // 캐시 프루닝 스케줄러: 기본 12시간 간격
+    let cacheTimer: ReturnType<typeof setInterval> | undefined;
+    if (config.cache.enabled) {
+      const CACHE_PRUNE_INTERVAL_MS = config.cache.pruneIntervalHours * 60 * 60 * 1000;
+      cacheTimer = setInterval(() => {
+        try {
+          const pruned = pruneCache(config.cache.maxAgeDays, config.cache.maxEntries);
+          if (pruned > 0) info(`[CACHE] ${pruned}건 오래된 캐시 정리`);
+        } catch (err) {
+          logError("[CACHE] 프루닝 실패:", err);
+        }
+      }, CACHE_PRUNE_INTERVAL_MS);
+      info(`[CACHE] 프루닝 스케줄러 활성화: ${config.cache.pruneIntervalHours}시간 간격`);
+    }
+
     // 프로세스 종료 시 스케줄러를 정리한다
     const shutdown = () => {
       info("서버 종료 중... 스케줄러 정리");
       clearInterval(ttlCleanupTimer);
       if (backupTimer) clearInterval(backupTimer);
+      if (cacheTimer) clearInterval(cacheTimer);
       clearInterval(purgeTimer);
+      stopMonitoring();
+      closeCache();
       closeSqlcipher();
       process.exit(0);
     };

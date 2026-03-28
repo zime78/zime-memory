@@ -5,6 +5,7 @@
 > Phase 8-14: memory_update 버그 수정 검증 + 누락 도구 전수 검증
 > Phase 15: 환경변수 Zod 검증 + LOG_LEVEL 테스트 (v2.1.0)
 > Phase 16: 임베딩 프로바이더 3-Mode 테스트 (ollama/local/off)
+> Phase 17: 원격 접속 + 읽기 캐시 테스트 (서버/클라이언트)
 
 ## 사전 조건
 
@@ -750,3 +751,193 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
 - **실행**: memory_save 호출
 - **기대**: 에러 응답 — 패키지 미설치 안내
 - **검증**: 에러 메시지에 "npm install @huggingface/transformers" 포함
+
+---
+
+## Phase 17: 원격 접속 + 읽기 캐시 (서버/클라이언트)
+
+> 사전 조건: Mac Mini Docker 실행 중, autossh 설치됨, SSH 키 인증 설정됨
+
+### Phase 17-A: 서버 모드 테스트 (Mac Mini, CACHE_ENABLED=false)
+
+#### T-S01: 서버 모드 서비스 시작 확인
+- **사전 조건**: `.env`에 `CACHE_ENABLED=false`
+- **검증 방법**: MCP 서버 시작 로그 확인
+- **기대 결과**:
+  - 로그에 `[CACHE]`, `[CONNECTION]` 메시지 **없음**
+  - 기존 로그만 출력 (Qdrant, MinIO, SQLCipher 초기화)
+- **검증 포인트**: `data/cache.db` 파일이 **생성되지 않음**
+
+#### T-S02: 서버 모드 기존 기능 정상 동작
+- **검증 방법**: Phase 1~6의 T01~T25 전체 정상 통과
+- **기대 결과**: 기존 테스트 100% 통과, 성능 차이 없음
+
+#### T-S03: 서버 모드 connectionMonitor 비활성 확인
+- **검증 방법**: `isOnline()` 호출
+- **기대 결과**: 항상 `true` 반환 (모니터링 비활성)
+
+---
+
+### Phase 17-B: 클라이언트 모드 — SSH 터널 연결 테스트
+
+#### T-C01: SSH 터널 스크립트 실행
+- **사전 조건**: Mac Mini Docker 서비스 실행 중
+- **검증 방법**: `./scripts/ssh-tunnel.sh` 실행
+- **기대 결과**:
+  ```bash
+  curl -s http://localhost:6333/healthz        # → Qdrant 응답
+  curl -s -o /dev/null -w "%{http_code}" http://localhost:9000/minio/health/live  # → 200
+  curl -s http://localhost:11434/api/tags | head -1  # → {"models":[...]}
+  ```
+- **검증 포인트**: 3개 서비스 모두 localhost로 접근 가능
+
+#### T-C02: SSH 터널 자동 재연결 (autossh)
+- **검증 방법**: `pkill -f "ssh.*mac-mini"` → 10초 대기 → 서비스 재확인
+- **기대 결과**: autossh가 자동 재연결, 서비스 접근 복구
+
+#### T-C03: launchd 자동시작 확인
+- **검증 방법**: `launchctl list | grep zime.memory-tunnel`
+- **기대 결과**: 서비스 등록됨, PID 할당됨
+
+---
+
+### Phase 17-C: 클라이언트 모드 — 온라인 동작 테스트 (CACHE_ENABLED=true)
+
+#### T-C04: 클라이언트 모드 서비스 시작 확인
+- **사전 조건**: `.env`에 `CACHE_ENABLED=true`, SSH 터널 연결됨
+- **검증 방법**: MCP 서버 시작 로그 확인
+- **기대 결과**:
+  - `[CACHE] 초기화 완료 (현재: 온라인)` 로그 출력
+  - `data/cache.db` 파일 생성됨
+
+#### T-C05: 온라인 검색 + 캐시 저장
+- **도구**: `memory_search`
+- **입력**: `{ "query": "Next.js Server Actions", "limit": 3 }`
+- **기대 결과**: Mac Mini Qdrant에서 결과 반환, `_fromCache` 필드 **없음**
+- **검증 포인트**: `data/cache.db`의 `search_cache` 테이블에 결과 캐시됨
+
+#### T-C06: 온라인 단건 조회 + 캐시 저장
+- **도구**: `memory_get`
+- **입력**: `{ "id": "<기존 메모리 ID>" }`
+- **기대 결과**: Mac Mini Qdrant에서 상세 반환
+- **검증 포인트**: `data/cache.db`의 `memory_cache` 테이블에 해당 ID 캐시됨
+
+#### T-C07: 온라인 저장 (쓰기 정상)
+- **도구**: `memory_save`
+- **입력**: `{ "content": "원격 접속 모드 테스트 메모", "title": "Remote Test" }`
+- **기대 결과**: `success: true`, Mac Mini Qdrant에 저장됨
+
+#### T-C08: 온라인 secrets 접근 (로컬 SQLCipher)
+- **도구**: `memory_search`
+- **입력**: `{ "store": "secrets", "query": "API" }`
+- **기대 결과**: 로컬 SQLCipher에서 검색 결과 반환
+
+---
+
+### Phase 17-D: 클라이언트 모드 — 오프라인 동작 테스트 (터널 끊김)
+
+#### T-C09: 터널 중지 + 오프라인 감지
+- **검증 방법**: `pkill -f "ssh.*mac-mini"` → 최대 60초 대기
+- **기대 결과**: `[CONNECTION] 오프라인 전환` 로그 출력
+
+#### T-C10: 오프라인 검색 — 캐시 히트
+- **사전 조건**: T-C05에서 캐시된 검색 결과 존재
+- **도구**: `memory_search`
+- **입력**: `{ "query": "Next.js Server Actions", "limit": 3 }` (T-C05와 동일 쿼리)
+- **기대 결과**: 캐시된 결과 반환, `_fromCache: true`
+
+#### T-C11: 오프라인 단건 조회 — 캐시 히트
+- **사전 조건**: T-C06에서 캐시된 메모리 존재
+- **도구**: `memory_get`
+- **입력**: `{ "id": "<T-C06과 동일 ID>" }`
+- **기대 결과**: 캐시된 결과 반환, `_fromCache: true`
+
+#### T-C12: 오프라인 검색 — 캐시 미스
+- **도구**: `memory_search`
+- **입력**: `{ "query": "캐시에 없는 새로운 쿼리", "limit": 3 }`
+- **기대 결과**: 빈 결과 또는 캐시 목록에서 부분 결과 반환
+
+#### T-C13: 오프라인 저장 차단 (general)
+- **도구**: `memory_save`
+- **입력**: `{ "content": "오프라인 저장 시도" }`
+- **기대 결과**: 에러 — "오프라인 모드에서는 저장 작업을 수행할 수 없습니다"
+
+#### T-C14: 오프라인 저장 차단 (images)
+- **도구**: `memory_save`
+- **입력**: `{ "store": "images", "filePath": "...", "mimeType": "image/png", "description": "test" }`
+- **기대 결과**: 에러 — "오프라인 모드에서는 파일 저장 작업을 수행할 수 없습니다"
+
+#### T-C15: 오프라인 secrets 접근 (정상 동작)
+- **도구**: `memory_save`
+- **입력**: `{ "store": "secrets", "name": "Offline Test Key", "value": "test", "secretType": "api-key" }`
+- **기대 결과**: `success: true` — secrets는 로컬이므로 오프라인에서도 쓰기 가능
+
+#### T-C16: 오프라인 삭제/수정 차단 (general)
+- **도구**: `memory_update`, `memory_delete`
+- **기대 결과**: 에러 — "오프라인 모드에서는 수정/삭제 작업을 수행할 수 없습니다"
+
+---
+
+### Phase 17-E: 클라이언트 모드 — 재연결 + 캐시 관리
+
+#### T-C17: 터널 재연결 + 온라인 복귀
+- **검증 방법**: `./scripts/ssh-tunnel.sh` → 최대 60초 대기
+- **기대 결과**: `[CONNECTION] 온라인 복귀` 로그 출력
+
+#### T-C18: 재연결 후 쓰기 정상 동작
+- **도구**: `memory_save`
+- **입력**: `{ "content": "재연결 후 저장 테스트" }`
+- **기대 결과**: `success: true`
+
+#### T-C19: 캐시 프루닝 동작
+- **검증 방법**: CACHE_MAX_AGE_DAYS 초과 데이터에 대해 프루닝 트리거
+- **기대 결과**: 오래된 캐시 항목 삭제됨
+
+#### T-C20: 캐시 통계 확인
+- **검증 방법**: 캐시 DB 통계 조회
+- **기대 결과**: `{ memoryCount: N, searchCount: N, dbSizeBytes: N }` (N > 0)
+
+---
+
+### Phase 17-F: 정리
+
+#### T-C21: 테스트 데이터 정리
+- T-C07에서 저장한 메모리 삭제
+- T-C15에서 저장한 secrets 삭제
+- T-C18에서 저장한 메모리 삭제
+
+#### T-C22: 최종 상태 확인
+- **서버**: `memory_stats` → 테스트 전과 동일
+- **클라이언트**: `data/cache.db` 존재, 캐시 통계 확인
+
+---
+
+### Phase 17 테스트 실행 체크리스트
+
+| # | 테스트 | 환경 | 결과 | 비고 |
+|---|--------|------|------|------|
+| T-S01 | 서버 시작 (캐시 없음) | Mac Mini | ☐ | |
+| T-S02 | 서버 기존 기능 정상 | Mac Mini | ☐ | Phase 1~6 재실행 |
+| T-S03 | 서버 모니터 비활성 | Mac Mini | ☐ | |
+| T-C01 | SSH 터널 연결 | 클라이언트 | ☐ | |
+| T-C02 | autossh 재연결 | 클라이언트 | ☐ | |
+| T-C03 | launchd 자동시작 | 클라이언트 | ☐ | |
+| T-C04 | 클라이언트 시작 | 클라이언트 | ☐ | |
+| T-C05 | 온라인 검색+캐시 | 클라이언트 | ☐ | |
+| T-C06 | 온라인 조회+캐시 | 클라이언트 | ☐ | |
+| T-C07 | 온라인 저장 | 클라이언트 | ☐ | |
+| T-C08 | 온라인 secrets | 클라이언트 | ☐ | |
+| T-C09 | 오프라인 감지 | 클라이언트 | ☐ | |
+| T-C10 | 오프라인 검색(히트) | 클라이언트 | ☐ | |
+| T-C11 | 오프라인 조회(히트) | 클라이언트 | ☐ | |
+| T-C12 | 오프라인 검색(미스) | 클라이언트 | ☐ | |
+| T-C13 | 오프라인 저장 차단 | 클라이언트 | ☐ | |
+| T-C14 | 오프라인 이미지 차단 | 클라이언트 | ☐ | |
+| T-C15 | 오프라인 secrets 정상 | 클라이언트 | ☐ | |
+| T-C16 | 오프라인 수정/삭제 차단 | 클라이언트 | ☐ | |
+| T-C17 | 재연결 온라인 복귀 | 클라이언트 | ☐ | |
+| T-C18 | 재연결 후 쓰기 | 클라이언트 | ☐ | |
+| T-C19 | 캐시 프루닝 | 클라이언트 | ☐ | |
+| T-C20 | 캐시 통계 | 클라이언트 | ☐ | |
+| T-C21 | 테스트 데이터 정리 | 양쪽 | ☐ | |
+| T-C22 | 최종 상태 확인 | 양쪽 | ☐ | |
