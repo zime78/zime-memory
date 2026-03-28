@@ -327,7 +327,7 @@ zime-memory를 멀티 머신 환경에서 운영할 수 있다. Mac Mini를 Dock
 brew install autossh
 
 # 2. SSH 키 인증 설정
-ssh-copy-id mac-mini
+ssh-copy-id your-server
 
 # 3. 터널 시작/중지/상태
 ./scripts/ssh-tunnel.sh          # 시작
@@ -368,7 +368,7 @@ launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
 |------|------|------|
 | "오프라인 모드" 에러 | SSH 터널 끊김 | `./scripts/ssh-tunnel.sh status`로 확인 후 재시작 |
 | 검색 결과 오래됨 | 캐시 데이터 | 온라인 복귀 후 동일 검색 → 최신 결과로 캐시 갱신 |
-| Mac Mini 접속 불가 | SSH 설정 문제 | `ssh mac-mini` 직접 테스트 |
+| 서버 접속 불가 | SSH 설정 문제 | `ssh your-server` 직접 테스트 |
 | autossh 미설치 | 패키지 미설치 | `brew install autossh` |
 | launchd 미동작 | plist 미등록 | `launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist` |
 
@@ -404,5 +404,5 @@ cd ~/mcp/zime-memory && docker compose down
 secrets store는 로컬 SQLCipher DB(`data/secrets.db`)를 사용하므로 머신별 독립 관리된다:
 
 - Mac Mini와 클라이언트는 각각 별도의 secrets를 가짐
-- 필요 시 수동 복사: `scp mac-mini:~/mcp/zime-memory/data/secrets.db ./data/secrets.db`
+- 필요 시 수동 복사: `scp your-server:~/mcp/zime-memory/data/secrets.db ./data/secrets.db`
 - 복사 시 `ZIME_ENCRYPTION_KEY`가 동일해야 함

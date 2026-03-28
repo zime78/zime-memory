@@ -229,8 +229,8 @@ claude mcp add zime-memory node ~/mcp/zime-memory/dist/index.js
 # 1. autossh 설치
 brew install autossh
 
-# 2. SSH 키 인증 설정 (mac-mini 호스트)
-ssh-copy-id mac-mini
+# 2. SSH 키 인증 설정 (SSH config의 호스트명)
+ssh-copy-id your-server
 
 # 3. SSH 터널 시작
 ./scripts/ssh-tunnel.sh
@@ -268,7 +268,7 @@ cp .env.example .env
 | `CACHE_ENABLED` | | `true` | 읽기 캐시 활성화 (서버 모드에서 `false`) |
 | `CACHE_MAX_AGE_DAYS` | | `7` | 캐시 최대 보관 일수 |
 | `CACHE_MAX_ENTRIES` | | `2000` | 캐시 최대 항목 수 |
-| `ZIME_SSH_HOST` | | `mac-mini` | SSH 터널 대상 호스트 |
+| `ZIME_SSH_HOST` | | | SSH 터널 대상 호스트 (SSH config의 Host명) |
 
 > `*` = 해당 store 사용 시 필수. `openssl rand -hex 32`로 암호화 키를 생성하세요.
 

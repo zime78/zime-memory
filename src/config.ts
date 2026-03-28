@@ -178,8 +178,8 @@ export const config = {
 
   /** 읽기 캐시 설정 (원격 접속 모드용, 오프라인 폴백) */
   cache: {
-    /** 캐시 활성화 여부 (기본 true, 서버 모드에서 false로 설정) */
-    enabled: env.CACHE_ENABLED !== "false",
+    /** 캐시 활성화 여부 (기본 false, 원격 접속 클라이언트에서 true로 설정) */
+    enabled: env.CACHE_ENABLED === "true",
     /** 캐시 DB 파일 경로 */
     dbPath:
       env.CACHE_DB_PATH ||

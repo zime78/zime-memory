@@ -10,7 +10,7 @@
 
 set -e
 
-SSH_HOST="${ZIME_SSH_HOST:-mac}"
+SSH_HOST="${ZIME_SSH_HOST:?ZIME_SSH_HOST 환경변수를 설정하세요 (예: .env에 ZIME_SSH_HOST=your-server)}"
 TUNNEL_PORTS=(
   "6333:localhost:6333"   # Qdrant REST API
   "6334:localhost:6334"   # Qdrant gRPC
