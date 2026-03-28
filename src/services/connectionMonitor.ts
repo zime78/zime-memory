@@ -90,6 +90,29 @@ export function stopMonitoring(): void {
 }
 
 /**
+ * 네트워크 에러 여부를 판별한다.
+ * fetch 실패, ECONNREFUSED 등 연결 관련 에러를 감지한다.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (!config.cache.enabled) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|abort/i.test(msg);
+}
+
+/**
+ * 네트워크 에러 발생 시 오프라인으로 전환하고 에러를 오프라인 메시지로 변환한다.
+ * 쓰기 작업의 catch 블록에서 사용한다.
+ */
+export function handleNetworkError(err: unknown, operation: string): never {
+  if (isNetworkError(err)) {
+    online = false;
+    warn(`[CONNECTION] 오프라인 전환 — ${operation} 중 네트워크 에러 감지`);
+    throw new Error(`오프라인 모드에서는 ${operation} 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.`);
+  }
+  throw err;
+}
+
+/**
  * 연결 상태를 확인하고 변경 시 로그를 출력한다.
  */
 async function checkConnection(): Promise<void> {
