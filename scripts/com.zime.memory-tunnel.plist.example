@@ -45,7 +45,7 @@
         <string>9001:localhost:9001</string>
         <string>-L</string>
         <string>11434:localhost:11434</string>
-        <!-- TODO: 아래 호스트명을 SSH config의 Host명으로 변경하세요 -->
+        <!-- SSH config의 Host명으로 변경하세요 (예: mac, rog, zime-nas) -->
         <string>your-server</string>
     </array>
 
