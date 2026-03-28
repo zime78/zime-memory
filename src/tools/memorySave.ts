@@ -106,7 +106,7 @@ export async function memorySave(args: MemorySaveInput) {
       service: args.service,
       tags: args.tags,
       notes: args.notes,
-      expiresAt: args.status === "draft" && args.ttl && args.ttl !== "0h"
+      expiresAt: args.status === "draft" && args.ttl && args.ttl !== "0h" && args.ttl !== "permanent"
         ? new Date(Date.now() + parseTTL(args.ttl)).toISOString()
         : undefined,
     });
@@ -156,7 +156,7 @@ export async function memorySave(args: MemorySaveInput) {
 
   const status = args.status;
   let expiresAt: string | undefined;
-  if (status === "draft" && args.ttl && args.ttl !== "0h") {
+  if (status === "draft" && args.ttl && args.ttl !== "0h" && args.ttl !== "permanent") {
     expiresAt = new Date(Date.now() + parseTTL(args.ttl)).toISOString();
   }
 

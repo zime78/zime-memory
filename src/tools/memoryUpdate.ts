@@ -131,7 +131,7 @@ export async function memoryUpdate(args: MemoryUpdateInput) {
   }
 
   // ttl이 변경되고 draft 상태이면 expiresAt을 재계산한다
-  if (args.ttl !== undefined && mergedStatus === "draft") {
+  if (args.ttl !== undefined && args.ttl !== "0h" && args.ttl !== "permanent" && mergedStatus === "draft") {
     mergedExpiresAt = new Date(Date.now() + parseTTL(args.ttl)).toISOString();
   }
 
