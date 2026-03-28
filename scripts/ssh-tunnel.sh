@@ -10,6 +10,13 @@
 
 set -e
 
+# .env에서 환경변수 로드 (스크립트 위치 기준)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a; source "$ENV_FILE" 2>/dev/null; set +a
+fi
+
 SSH_HOST="${ZIME_SSH_HOST:?ZIME_SSH_HOST 환경변수를 설정하세요 (예: .env에 ZIME_SSH_HOST=your-server)}"
 TUNNEL_PORTS=(
   "6333:localhost:6333"   # Qdrant REST API
