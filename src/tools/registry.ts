@@ -147,7 +147,7 @@ export const toolRegistry: ToolDefinition[] = [
   {
     name: "memory_obsidian_sync",
     description:
-      "Obsidian vault와 zime-memory 간 양방향 동기화를 수행한다. import/export/bidirectional 방향을 지정할 수 있으며, YAML frontmatter로 메타데이터를 매핑한다.",
+      "Obsidian vault와 zime-memory 간 양방향 동기화를 수행한다. import/export/bidirectional 방향을 지정할 수 있으며, YAML frontmatter로 메타데이터를 매핑한다. export 시 exportTags/exportCategory로 필터링 가능하며, copyAssets=true로 MD 내 참조 이미지/파일을 vault에 복사한다. subfolderByTag로 태그 기반 서브폴더 분류를 지원한다.",
     schema: memoryObsidianSyncSchema,
     handler: memoryObsidianSync,
   },
