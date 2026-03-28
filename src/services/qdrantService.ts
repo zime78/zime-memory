@@ -444,6 +444,20 @@ export async function scrollMemories(
  *
  * @param id - soft-delete할 메모리의 UUID
  */
+/**
+ * 특정 필드만 부분 업데이트한다 (벡터 재생성 없이).
+ * upsertMemory와 달리 지정한 필드만 변경하고 나머지 payload는 유지한다.
+ */
+export async function setMemoryPayload(
+  id: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  await client.setPayload(config.qdrant.collectionName, {
+    payload,
+    points: [id],
+  });
+}
+
 export async function deleteMemory(id: string): Promise<void> {
   const now = new Date().toISOString();
   await client.setPayload(config.qdrant.collectionName, {

@@ -10,11 +10,13 @@ import { jsonResponse, errorResponse } from "../utils/response.js";
 import {
   readVaultNotes,
   writeVaultNote,
+  copyReferencedAssets,
 } from "../services/obsidianService.js";
 import {
   scrollMemories,
   getMemoryById,
   upsertMemory,
+  setMemoryPayload,
 } from "../services/qdrantService.js";
 import { generateEmbedding } from "../services/embeddingService.js";
 import type { MemoryPayload, MemoryCategory, MemoryPriority } from "../types/index.js";
@@ -27,6 +29,18 @@ export const memoryObsidianSyncSchema = z.object({
   folder: z.string().optional(),
   /** 동기화 방향 */
   direction: z.enum(["import", "export", "bidirectional"]),
+  /** export 시 이 태그를 가진 메모리만 내보냄 (OR 조건) */
+  exportTags: z.array(z.string()).optional(),
+  /** export 시 이 카테고리만 내보냄 */
+  exportCategory: z.enum(["note", "knowledge", "reference", "snippet", "decision", "custom"]).optional(),
+  /** MD 내 이미지/파일 참조를 vault로 복사 */
+  copyAssets: z.boolean().default(false),
+  /** 에셋 원본 디렉토리 (copyAssets=true 시 사용) */
+  assetSourceDir: z.string().optional(),
+  /** vault 내 에셋 저장 폴더 (예: "res") */
+  assetDestFolder: z.string().optional(),
+  /** 이 태그 값으로 서브폴더 분류 (예: "child-issue" → child-issue/ 폴더) */
+  subfolderByTag: z.string().optional(),
 });
 
 export type MemoryObsidianSyncInput = z.infer<typeof memoryObsidianSyncSchema>;
@@ -48,6 +62,7 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
   let exported = 0;
   let skipped = 0;
   let autoLinked = 0;
+  let totalAssets = 0;
   const errors: string[] = [];
 
   // Import: Obsidian → zime-memory
@@ -64,7 +79,7 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
               // bidirectional: 더 최신인 쪽이 우선
               const existingPayload = existing.payload as Record<string, unknown>;
               const existingUpdated = existingPayload.updatedAt as string;
-              if (args.direction === "bidirectional" && existingUpdated > note.updatedAt) {
+              if (args.direction === "bidirectional" && new Date(existingUpdated).getTime() > new Date(note.updatedAt).getTime()) {
                 skipped++;
                 continue;
               }
@@ -137,13 +152,23 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
           if (batch.points.length === 0) break;
           for (const point of batch.points) {
             const payload = point.payload as Record<string, unknown>;
+            const tags = (payload.tags as string[]) || [];
+            const category = (payload.category as string) || "note";
+
+            // 태그 필터: exportTags가 지정된 경우 해당 태그를 가진 메모리만 포함
+            if (args.exportTags && args.exportTags.length > 0) {
+              if (!tags.some(t => args.exportTags!.includes(t))) continue;
+            }
+            // 카테고리 필터
+            if (args.exportCategory && category !== args.exportCategory) continue;
+
             allMemories.push({
               id: String(point.id),
               title: (payload.title as string) || `memory-${point.id}`,
               content: payload.content as string,
-              category: (payload.category as string) || "note",
+              category,
               priority: (payload.priority as string) || "medium",
-              tags: (payload.tags as string[]) || [],
+              tags,
               relatedIds: (payload.relatedIds as string[]) || [],
             });
           }
@@ -153,10 +178,21 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
       }
 
       // ── Phase 2: 태그 기반 자동 링크 → Qdrant relatedIds 영구 저장 ──
-      // 태그 → 메모리 ID 역인덱스
+      // 자동 링크에서 제외할 공통 태그 (너무 광범위하여 모든 메모리가 연결됨)
+      const EXCLUDE_TAGS_FROM_LINKING = new Set([
+        "jira", "ITSM", "Q-글로벌", "child-issue", "parent-issue",
+        "작업 완료", "작업_완료", "진행 중", "진행_중", "종료", "Cancel",
+        "DEFECT", "하위 작업", "하위_작업", "reference", "APP", "Q", "US",
+        "보통", "높음", "낮음", "긴급", "배포전결함",
+        "note", "knowledge", "snippet", "decision", "custom",
+        "low", "medium", "high", "critical",
+      ]);
+
+      // 태그 → 메모리 ID 역인덱스 (공통 태그 제외)
       const tagIndex = new Map<string, string[]>();
       for (const mem of allMemories) {
         for (const tag of mem.tags) {
+          if (EXCLUDE_TAGS_FROM_LINKING.has(tag)) continue;
           const list = tagIndex.get(tag) || [];
           list.push(mem.id);
           tagIndex.set(tag, list);
@@ -185,41 +221,45 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
 
         if (newPeers.length === 0) continue;
 
-        // source 측 relatedIds 업데이트
+        // source 측 relatedIds 업데이트 (set_payload로 부분 업데이트)
         const updatedRelated = [...mem.relatedIds, ...newPeers];
-        const sourceFull = await getMemoryById(mem.id, true);
-        if (sourceFull && sourceFull.vector) {
-          const sourcePayload: MemoryPayload = {
-            ...(sourceFull.payload as unknown as MemoryPayload),
-            relatedIds: updatedRelated,
-            updatedAt: new Date().toISOString(),
-          };
-          await upsertMemory(mem.id, sourceFull.vector, sourcePayload);
-          mem.relatedIds = updatedRelated; // in-memory 동기화
-        }
+        await setMemoryPayload(mem.id, {
+          relatedIds: updatedRelated,
+          updatedAt: new Date().toISOString(),
+        });
+        mem.relatedIds = updatedRelated; // in-memory 동기화
 
-        // 양방향: 각 peer의 relatedIds에도 source 추가
+        // 양방향: 각 peer의 relatedIds에도 source 추가 (개별 에러 처리)
         for (const peerId of newPeers) {
           const peer = memMap.get(peerId);
           if (!peer || peer.relatedIds.includes(mem.id)) continue;
 
-          peer.relatedIds.push(mem.id);
-          const peerFull = await getMemoryById(peerId, true);
-          if (peerFull && peerFull.vector) {
-            const peerPayload: MemoryPayload = {
-              ...(peerFull.payload as unknown as MemoryPayload),
+          try {
+            peer.relatedIds.push(mem.id);
+            await setMemoryPayload(peerId, {
               relatedIds: peer.relatedIds,
               updatedAt: new Date().toISOString(),
-            };
-            await upsertMemory(peerId, peerFull.vector, peerPayload);
+            });
+            autoLinked++;
+          } catch (err) {
+            errors.push(`auto-link peer ${peerId}: ${err instanceof Error ? err.message : String(err)}`);
           }
-          autoLinked++;
         }
       }
 
       // ── Phase 3: Obsidian 노트 저장 (relatedIds → [[wikilink]]) ──
       const idToTitle = new Map<string, string>();
       for (const mem of allMemories) idToTitle.set(mem.id, mem.title);
+
+      // ITSM 이슈 번호 → 제목 매핑 (ghost node 방지용 wiki-link 변환)
+      const itsmToTitle = new Map<string, string>();
+      for (const mem of allMemories) {
+        for (const tag of mem.tags) {
+          if (/^ITSM-\d+$/.test(tag)) {
+            itsmToTitle.set(tag, mem.title);
+          }
+        }
+      }
 
       for (const mem of allMemories) {
         try {
@@ -230,30 +270,77 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
             if (t && t !== mem.title) relatedTitles.push(t);
           }
 
-          await writeVaultNote(vaultPath, folder, {
+          // ../ITSM-XXXX/ITSM-XXXX.md 링크를 Obsidian wiki-link로 변환
+          // (assetPathPrefix 변환 전에 처리하여 이미지 경로와 충돌 방지)
+          let exportContent = mem.content;
+          exportContent = exportContent.replace(
+            /\[([^\]]+)\]\(\.\.\/ITSM-(\d+)\/ITSM-\d+\.md\)/g,
+            (_match, displayText, itsmNum) => {
+              const title = itsmToTitle.get(`ITSM-${itsmNum}`);
+              if (title) {
+                const safeTitle = title.replace(/[<>:"/\\|?*]/g, "_");
+                return `[[${safeTitle}|${displayText}]]`;
+              }
+              return _match;
+            }
+          );
+
+          // 서브폴더 결정: subfolderByTag로 태그 기반 분류
+          let effectiveFolder = folder;
+          let skipCategoryFolder = false;
+          if (args.subfolderByTag) {
+            // 지정 태그 매칭 확인
+            const matchTag = mem.tags.find(t => t === args.subfolderByTag);
+            if (matchTag) {
+              effectiveFolder = folder ? `${folder}/${matchTag}` : matchTag;
+            } else {
+              // 매칭 안 되면 다른 분류 태그를 찾아 폴더명으로 사용
+              // (예: "parent-issue", "child-issue" 등 "-issue" 패턴)
+              const altTag = mem.tags.find(t => t.endsWith("-issue") && t !== args.subfolderByTag);
+              if (altTag) {
+                effectiveFolder = folder ? `${folder}/${altTag}` : altTag;
+              }
+            }
+            skipCategoryFolder = true; // subfolderByTag 사용 시 카테고리 서브폴더 생략
+          }
+
+          await writeVaultNote(vaultPath, effectiveFolder, {
             id: mem.id,
             title: mem.title,
-            content: mem.content,
-            category: mem.category,
+            content: exportContent,
+            category: skipCategoryFolder ? "" : mem.category, // 빈 문자열로 카테고리 폴더 생략
             priority: mem.priority,
             tags: mem.tags,
             relatedTitles,
+            assetPathPrefix: args.assetDestFolder, // export 시 이미지 경로 변환 (../ITSM- → ../res/ITSM-)
           });
 
-          // obsidianPath 업데이트
+          // 에셋 복사: 항상 base folder 기준으로 복사 (서브폴더가 아닌 공통 위치)
+          if (args.copyAssets && args.assetSourceDir) {
+            const assetBaseFolder = args.assetDestFolder
+              ? (folder ? `${folder}/${args.assetDestFolder}` : args.assetDestFolder)
+              : folder;
+            const assetCount = await copyReferencedAssets(
+              mem.content,
+              args.assetSourceDir,
+              vaultPath,
+              assetBaseFolder,
+              args.assetDestFolder
+            );
+            totalAssets += assetCount;
+          }
+
+          // obsidianPath 업데이트 (set_payload로 부분 업데이트)
           {
-            const full = await getMemoryById(mem.id, true);
-            if (full && full.vector) {
-              const safeTitle = mem.title.replace(/[<>:"/\\|?*]/g, "_");
-              const categoryFolder = mem.category || "note";
-              const relPath = folder ? `${folder}/${categoryFolder}/${safeTitle}.md` : `${categoryFolder}/${safeTitle}.md`;
-              const updated: MemoryPayload = {
-                ...(full.payload as unknown as MemoryPayload),
-                obsidianPath: relPath,
-                updatedAt: new Date().toISOString(),
-              };
-              await upsertMemory(mem.id, full.vector, updated);
-            }
+            const safeTitle = mem.title.replace(/[<>:"/\\|?*]/g, "_");
+            const categoryFolder = args.subfolderByTag ? "" : (mem.category || "note");
+            const relPath = categoryFolder
+              ? (effectiveFolder ? `${effectiveFolder}/${categoryFolder}/${safeTitle}.md` : `${categoryFolder}/${safeTitle}.md`)
+              : (effectiveFolder ? `${effectiveFolder}/${safeTitle}.md` : `${safeTitle}.md`);
+            await setMemoryPayload(mem.id, {
+              obsidianPath: relPath,
+              updatedAt: new Date().toISOString(),
+            });
           }
 
           exported++;
@@ -274,6 +361,7 @@ export async function memoryObsidianSync(args: MemoryObsidianSyncInput) {
     exported,
     skipped,
     autoLinked,
+    assetsCopied: totalAssets,
     errors: errors.length > 0 ? errors : undefined,
   } as Record<string, unknown>);
 }
