@@ -84,8 +84,17 @@ export async function searchQdrant(args: {
     store: string;
     payload: Record<string, unknown> | null | undefined;
     presignedUrl?: string;
+    _fromCache?: boolean;
   }>
 > {
+  /* 오프라인 + 캐시 활성 → 캐시에서 검색 */
+  if (config.cache.enabled && !isOnline()) {
+    const { getCachedSearch, getCachedList } = await import("../cacheService.js");
+    const cached = getCachedSearch(args.query);
+    if (cached) return cached.map((r) => ({ ...r, score: r.score ?? 0, payload: r.payload ?? null }));
+    return getCachedList(args.store, args.limit).map((r) => ({ ...r, score: 0, payload: r.payload ?? null }));
+  }
+
   const vector = await generateEmbedding(args.query);
 
   /* store 필터 추가 — general 포함 모든 store에 필터 적용 (C5 fix) */
@@ -125,6 +134,17 @@ export async function searchQdrant(args: {
       };
     }),
   );
+
+  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 */
+  if (config.cache.enabled && enriched.length > 0) {
+    const { cacheSearchResults, cacheMemory } = await import("../cacheService.js");
+    cacheSearchResults(args.query, enriched);
+    for (const r of enriched) {
+      if (r.payload && r.id) {
+        cacheMemory(String(r.id), r.store, r.payload as Record<string, unknown>);
+      }
+    }
+  }
 
   return enriched;
 }
