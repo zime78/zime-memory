@@ -297,3 +297,112 @@ link/summarize      O        -       -      -      -
 reindex             O        -       -      -      -
 obsidian_sync       O        -       -      -      -
 ```
+
+---
+
+## 원격 접속 모드 (SSH 터널)
+
+### 개요
+
+zime-memory를 멀티 머신 환경에서 운영할 수 있다. Mac Mini를 Docker 서버로, 다른 컴퓨터를 클라이언트로 사용한다.
+
+- **서버 (Mac Mini)**: Docker(Qdrant + MinIO) + Ollama 실행, `CACHE_ENABLED=false`
+- **클라이언트**: SSH 터널로 서버 접속, 로컬 캐시로 오프라인 폴백, `CACHE_ENABLED=true`
+
+### 서버/클라이언트 .env 차이
+
+| 변수 | 서버 (Mac Mini) | 클라이언트 |
+|------|----------------|-----------|
+| `CACHE_ENABLED` | `false` | `true` (기본값) |
+| `QDRANT_URL` | `http://localhost:6333` | `http://localhost:6333` (터널) |
+| `MINIO_ENDPOINT` | `localhost` | `localhost` (터널) |
+| `OLLAMA_URL` | `http://localhost:11434` | `http://localhost:11434` (터널) |
+
+> 양쪽 모두 localhost를 사용한다. 클라이언트는 SSH 터널이 localhost 포트를 Mac Mini로 포워딩한다.
+
+### SSH 터널 설정
+
+```bash
+# 1. autossh 설치 (macOS)
+brew install autossh
+
+# 2. SSH 키 인증 설정
+ssh-copy-id mac-mini
+
+# 3. 터널 시작/중지/상태
+./scripts/ssh-tunnel.sh          # 시작
+./scripts/ssh-tunnel.sh stop     # 중지
+./scripts/ssh-tunnel.sh status   # 상태 확인
+
+# 4. launchd 자동시작 (로그인 시 자동 터널)
+ln -sf ~/mcp/zime-memory/scripts/com.zime.memory-tunnel.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+```
+
+### 온라인/오프라인 동작
+
+**온라인** (SSH 터널 연결됨):
+- 모든 MCP 도구 정상 동작
+- 검색/조회 결과가 자동으로 로컬 캐시(`data/cache.db`)에 저장됨
+- 30초 간격으로 연결 상태 모니터링
+
+**오프라인** (SSH 터널 끊김):
+- 읽기: 캐시에서 이전 검색/조회 결과 반환 (`_fromCache: true` 표시)
+- 쓰기: 차단됨 — "오프라인 모드에서는 쓰기 작업을 수행할 수 없습니다" 에러
+- **예외**: secrets store는 로컬 SQLCipher이므로 오프라인에서도 읽기/쓰기 가능
+- 터널 재연결 시 30초 내 자동 온라인 복귀
+
+### 캐시 설정
+
+| 환경변수 | 기본값 | 설명 |
+|----------|--------|------|
+| `CACHE_ENABLED` | `true` | 캐시 활성화 (서버에서 `false`) |
+| `CACHE_DB_PATH` | `data/cache.db` | 캐시 DB 경로 |
+| `CACHE_MAX_AGE_DAYS` | `7` | 캐시 보관 기간 (일) |
+| `CACHE_MAX_ENTRIES` | `2000` | 최대 캐시 항목 수 |
+| `CACHE_PRUNE_INTERVAL_HOURS` | `12` | 프루닝 주기 (시간) |
+
+### 트러블슈팅
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| "오프라인 모드" 에러 | SSH 터널 끊김 | `./scripts/ssh-tunnel.sh status`로 확인 후 재시작 |
+| 검색 결과 오래됨 | 캐시 데이터 | 온라인 복귀 후 동일 검색 → 최신 결과로 캐시 갱신 |
+| Mac Mini 접속 불가 | SSH 설정 문제 | `ssh mac-mini` 직접 테스트 |
+| autossh 미설치 | 패키지 미설치 | `brew install autossh` |
+| launchd 미동작 | plist 미등록 | `launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist` |
+
+---
+
+## 멀티 머신 운영
+
+### 데이터 마이그레이션
+
+기존 양쪽 Docker에 분산된 데이터를 Mac Mini로 통합한다:
+
+```bash
+# 1. 현재 컴퓨터에서 데이터 내보내기
+# Claude Code에서: "전체 메모리 내보내줘"
+# → memory_export 실행 → JSON 파일 생성
+
+# 2. Mac Mini에서 데이터 가져오기
+# Claude Code에서: "메모리 가져오기" + JSON 파일 경로
+# → memory_import 실행 (중복 건너뛰기)
+
+# 3. 현재 컴퓨터의 Docker 중지 (리소스 절약)
+cd ~/mcp/zime-memory && docker compose down
+
+# 4. SSH 터널 시작
+./scripts/ssh-tunnel.sh
+
+# 5. 검증
+# Claude Code에서: "메모리 통계 보여줘"
+```
+
+### SQLCipher (secrets) 운영
+
+secrets store는 로컬 SQLCipher DB(`data/secrets.db`)를 사용하므로 머신별 독립 관리된다:
+
+- Mac Mini와 클라이언트는 각각 별도의 secrets를 가짐
+- 필요 시 수동 복사: `scp mac-mini:~/mcp/zime-memory/data/secrets.db ./data/secrets.db`
+- 복사 시 `ZIME_ENCRYPTION_KEY`가 동일해야 함

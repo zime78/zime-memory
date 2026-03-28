@@ -67,6 +67,13 @@ const envSchema = z.object({
   /** SQLCipher 암호화 DB */
   SQLCIPHER_DB_PATH: z.string().optional(),
   ZIME_ENCRYPTION_KEY: z.string().optional(),
+
+  /** 읽기 캐시 (원격 접속 모드용) */
+  CACHE_ENABLED: z.string().optional(),
+  CACHE_DB_PATH: z.string().optional(),
+  CACHE_MAX_AGE_DAYS: z.coerce.number().optional().default(7),
+  CACHE_MAX_ENTRIES: z.coerce.number().optional().default(2000),
+  CACHE_PRUNE_INTERVAL_HOURS: z.coerce.number().optional().default(12),
 });
 
 /** 환경 변수 파싱 (알 수 없는 키는 무시) */
@@ -167,5 +174,26 @@ export const config = {
       ),
     /** 암호화 키 (필수, 미설정 시 secrets store 비활성) */
     encryptionKey: env.ZIME_ENCRYPTION_KEY,
+  },
+
+  /** 읽기 캐시 설정 (원격 접속 모드용, 오프라인 폴백) */
+  cache: {
+    /** 캐시 활성화 여부 (기본 true, 서버 모드에서 false로 설정) */
+    enabled: env.CACHE_ENABLED !== "false",
+    /** 캐시 DB 파일 경로 */
+    dbPath:
+      env.CACHE_DB_PATH ||
+      path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        "..",
+        "data",
+        "cache.db"
+      ),
+    /** 캐시 최대 보관 일수 (기본 7일) */
+    maxAgeDays: env.CACHE_MAX_AGE_DAYS,
+    /** 캐시 최대 항목 수 (기본 2000) */
+    maxEntries: env.CACHE_MAX_ENTRIES,
+    /** 캐시 프루닝 주기 (시간 단위, 기본 12시간) */
+    pruneIntervalHours: env.CACHE_PRUNE_INTERVAL_HOURS,
   },
 };

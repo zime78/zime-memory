@@ -15,6 +15,8 @@ import {
   getPresignedUrl,
   isMinioReady,
 } from "../minioService.js";
+import { isOnline } from "../connectionMonitor.js";
+import { config } from "../../config.js";
 import type { MemoryPayload, MemoryStore, RouteResult } from "../../types/index.js";
 
 /** general store 저장 — 기존 Qdrant 동작 */
@@ -35,6 +37,11 @@ export async function saveGeneral(args: {
   /** 사전 계산된 임베딩 벡터 (제공 시 재생성 생략) */
   precomputedVector?: number[];
 }): Promise<RouteResult> {
+  /* 오프라인 시 쓰기 차단 */
+  if (config.cache.enabled && !isOnline()) {
+    throw new Error("오프라인 모드에서는 저장 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
+
   const id = args.id || uuidv4();
   const now = new Date().toISOString();
   /* CRITICAL fix: 호출자가 벡터를 제공하면 재생성하지 않는다 */

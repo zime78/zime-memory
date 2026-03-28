@@ -29,6 +29,15 @@ import {
   countSecrets,
   isSqlcipherReady,
 } from "./sqlcipherService.js";
+import { isOnline } from "./connectionMonitor.js";
+import {
+  cacheMemory,
+  getCachedMemory,
+  cacheSearchResults,
+  getCachedSearch,
+  getCachedList,
+} from "./cacheService.js";
+import { config } from "../config.js";
 import { info, error as logError } from "../utils/logger.js";
 import type { MemoryPayload, MemoryStore, RouteResult } from "../types/index.js";
 
@@ -58,11 +67,19 @@ export async function searchAll(args: {
     id: string | number;
     score: number | null;
     store: string;
-    matchType: "vector" | "keyword";
+    matchType: "vector" | "keyword" | "cache";
     payload?: Record<string, unknown> | null;
     presignedUrl?: string;
+    _fromCache?: boolean;
   }>
 > {
+  /* 오프라인 + 캐시 활성 → 캐시에서 검색 */
+  if (config.cache.enabled && !isOnline()) {
+    const cached = getCachedSearch(args.query);
+    if (cached) return cached.map((r) => ({ ...r, matchType: "cache" as const }));
+    return getCachedList(args.filterOptions?.store, args.limit);
+  }
+
   /* Qdrant(general+images+files) + SQLCipher(secrets) 병렬 실행 */
   const [qdrantResults, secretResults] = await Promise.all([
     (async () => {
@@ -139,7 +156,19 @@ export async function searchAll(args: {
   const merged = [...qdrantResults, ...secretResults];
   merged.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
 
-  return merged.slice(0, args.limit);
+  const results = merged.slice(0, args.limit);
+
+  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 */
+  if (config.cache.enabled) {
+    cacheSearchResults(args.query, results);
+    for (const r of results) {
+      if (r.payload && r.id) {
+        cacheMemory(String(r.id), r.store, r.payload as Record<string, unknown>);
+      }
+    }
+  }
+
+  return results;
 }
 
 // ─────────────────────────────────────────────
@@ -155,7 +184,17 @@ export async function getByStore(
   store: MemoryStore;
   data?: Record<string, unknown>;
   presignedUrl?: string;
+  _fromCache?: boolean;
 }> {
+  /* 오프라인 + 캐시 활성 + secrets 아닌 경우 → 캐시에서 조회 */
+  if (config.cache.enabled && !isOnline() && store !== "secrets") {
+    const cached = getCachedMemory(id);
+    if (cached) {
+      return { found: true, store: cached.store as MemoryStore, data: cached.payload, _fromCache: true };
+    }
+    return { found: false, store };
+  }
+
   if (store === "secrets") {
     /* isSqlcipherReady 가드 — 미초기화 시 found: false 반환 */
     if (!isSqlcipherReady()) return { found: false, store };
@@ -184,6 +223,11 @@ export async function getByStore(
     } catch { /* presigned URL 생성 실패는 무시 — 메타데이터만 반환 */ }
   }
 
+  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 */
+  if (config.cache.enabled && result.payload) {
+    cacheMemory(id, store, result.payload as Record<string, unknown>);
+  }
+
   return {
     found: true,
     store,
@@ -201,6 +245,11 @@ export async function deleteByStore(
   store: MemoryStore,
   id: string,
 ): Promise<boolean> {
+  /* 오프라인 시 쓰기 차단 (secrets 제외 — 로컬 SQLCipher) */
+  if (config.cache.enabled && !isOnline() && store !== "secrets") {
+    throw new Error("오프라인 모드에서는 삭제 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
+
   if (store === "secrets") {
     /* isSqlcipherReady 가드 — 미초기화 시 에러 throw */
     if (!isSqlcipherReady()) {
@@ -241,6 +290,11 @@ export async function updateByStore(
   id: string,
   updates: Record<string, unknown>,
 ): Promise<boolean> {
+  /* 오프라인 시 쓰기 차단 (secrets 제외 — 로컬 SQLCipher) */
+  if (config.cache.enabled && !isOnline() && store !== "secrets") {
+    throw new Error("오프라인 모드에서는 수정 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
+
   if (store === "secrets") {
     /* isSqlcipherReady 가드 — 미초기화 시 에러 throw */
     if (!isSqlcipherReady()) {

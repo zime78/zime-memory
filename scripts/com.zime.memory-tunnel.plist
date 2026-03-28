@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- zime-memory SSH 터널 launchd 서비스
+         로그인 시 자동으로 Mac Mini Docker 서비스에 SSH 터널을 설정한다.
+
+         설치:
+           ln -sf ~/mcp/zime-memory/scripts/com.zime.memory-tunnel.plist ~/Library/LaunchAgents/
+           launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+
+         제거:
+           launchctl unload ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+           rm ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+    -->
+    <key>Label</key>
+    <string>com.zime.memory-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/autossh</string>
+        <string>-M</string>
+        <string>0</string>
+        <string>-N</string>
+        <string>-o</string>
+        <string>ServerAliveInterval=30</string>
+        <string>-o</string>
+        <string>ServerAliveCountMax=3</string>
+        <string>-o</string>
+        <string>ExitOnForwardFailure=yes</string>
+        <string>-o</string>
+        <string>ConnectTimeout=10</string>
+        <string>-L</string>
+        <string>6333:localhost:6333</string>
+        <string>-L</string>
+        <string>6334:localhost:6334</string>
+        <string>-L</string>
+        <string>9000:localhost:9000</string>
+        <string>-L</string>
+        <string>9001:localhost:9001</string>
+        <string>-L</string>
+        <string>11434:localhost:11434</string>
+        <string>mac</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/zime-memory-tunnel.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/zime-memory-tunnel.err</string>
+</dict>
+</plist>

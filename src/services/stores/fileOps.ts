@@ -15,6 +15,7 @@ import {
   isMinioReady,
 } from "../minioService.js";
 import { config } from "../../config.js";
+import { isOnline } from "../connectionMonitor.js";
 import { error as logError } from "../../utils/logger.js";
 import type { MemoryPayload, RouteResult } from "../../types/index.js";
 
@@ -84,6 +85,11 @@ export async function saveFile(args: {
   priority?: string;
   resolution?: { width: number; height: number };
 }): Promise<RouteResult> {
+  /* 오프라인 시 쓰기 차단 */
+  if (config.cache.enabled && !isOnline()) {
+    throw new Error("오프라인 모드에서는 파일 저장 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
+
   if (!isMinioReady()) {
     throw new Error("MinIO가 초기화되지 않았습니다. MINIO_ACCESS_KEY/MINIO_SECRET_KEY 환경변수를 확인하세요.");
   }
