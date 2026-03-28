@@ -276,7 +276,9 @@ ssh-copy-id your-server
 # 3. SSH 터널 시작
 ./scripts/ssh-tunnel.sh
 
-# 4. launchd 자동시작 등록 (선택)
+# 4. launchd 자동시작 등록 (권장 — 재부팅 시 터널 자동 시작)
+cp scripts/com.zime.memory-tunnel.plist.example scripts/com.zime.memory-tunnel.plist
+# com.zime.memory-tunnel.plist 내 "your-server"를 SSH config Host명으로 변경
 ln -sf ~/mcp/zime-memory/scripts/com.zime.memory-tunnel.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
 
