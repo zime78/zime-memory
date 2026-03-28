@@ -15,6 +15,7 @@ import {
   isMinioReady,
 } from "../minioService.js";
 import { config } from "../../config.js";
+import { isOnline, handleNetworkError } from "../connectionMonitor.js";
 import { error as logError } from "../../utils/logger.js";
 import type { MemoryPayload, RouteResult } from "../../types/index.js";
 
@@ -84,59 +85,68 @@ export async function saveFile(args: {
   priority?: string;
   resolution?: { width: number; height: number };
 }): Promise<RouteResult> {
+  /* 오프라인 시 쓰기 차단 */
+  if (config.cache.enabled && !isOnline()) {
+    throw new Error("오프라인 모드에서는 파일 저장 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
+
   if (!isMinioReady()) {
     throw new Error("MinIO가 초기화되지 않았습니다. MINIO_ACCESS_KEY/MINIO_SECRET_KEY 환경변수를 확인하세요.");
   }
 
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  const ext = getExtension(args.mimeType, args.originalName);
-  const objectKey = `${id}${ext}`;
-  const bucket = resolveBucket(args.store);
-  const buffer = await resolveFileData(args);
-
-  /* 1. MinIO에 바이너리 업로드 */
-  const { etag, size } = await uploadObject(bucket, objectKey, buffer, {
-    mimeType: args.mimeType,
-    originalName: args.originalName || `file${ext}`,
-    memoryId: id,
-  });
-
-  /* 2. description으로 임베딩 생성 */
-  const vector = await generateEmbedding(args.description);
-
-  /* 3. Qdrant에 메타데이터 저장 */
-  const payload: MemoryPayload = {
-    content: args.description,
-    title: args.originalName,
-    tags: args.tags || [],
-    category: (args.category as MemoryPayload["category"]) || "reference",
-    priority: (args.priority as MemoryPayload["priority"]) || "medium",
-    status: "published",
-    createdAt: now,
-    updatedAt: now,
-    store: args.store,
-    objectKey,
-    originalName: args.originalName || `file${ext}`,
-    mimeType: args.mimeType,
-    fileSize: size,
-    bucket,
-    description: args.description,
-    resolution: args.resolution,
-  };
-
   try {
-    await upsertMemory(id, vector, payload);
-  } catch (err) {
-    /* Qdrant 실패 시 MinIO 오브젝트 롤백 */
-    logError(`Qdrant upsert 실패, MinIO 롤백: ${objectKey}`);
-    try {
-      await deleteMinioObject(bucket, objectKey);
-    } catch (rollbackErr) {
-      logError(`MinIO 롤백 실패: ${rollbackErr}`);
-    }
-    throw err;
-  }
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    const ext = getExtension(args.mimeType, args.originalName);
+    const objectKey = `${id}${ext}`;
+    const bucket = resolveBucket(args.store);
+    const buffer = await resolveFileData(args);
 
-  return { id, store: args.store, objectKey, bucket, etag, size };
+    /* 1. MinIO에 바이너리 업로드 */
+    const { etag, size } = await uploadObject(bucket, objectKey, buffer, {
+      mimeType: args.mimeType,
+      originalName: args.originalName || `file${ext}`,
+      memoryId: id,
+    });
+
+    /* 2. description으로 임베딩 생성 */
+    const vector = await generateEmbedding(args.description);
+
+    /* 3. Qdrant에 메타데이터 저장 */
+    const payload: MemoryPayload = {
+      content: args.description,
+      title: args.originalName,
+      tags: args.tags || [],
+      category: (args.category as MemoryPayload["category"]) || "reference",
+      priority: (args.priority as MemoryPayload["priority"]) || "medium",
+      status: "published",
+      createdAt: now,
+      updatedAt: now,
+      store: args.store,
+      objectKey,
+      originalName: args.originalName || `file${ext}`,
+      mimeType: args.mimeType,
+      fileSize: size,
+      bucket,
+      description: args.description,
+      resolution: args.resolution,
+    };
+
+    try {
+      await upsertMemory(id, vector, payload);
+    } catch (err) {
+      /* Qdrant 실패 시 MinIO 오브젝트 롤백 */
+      logError(`Qdrant upsert 실패, MinIO 롤백: ${objectKey}`);
+      try {
+        await deleteMinioObject(bucket, objectKey);
+      } catch (rollbackErr) {
+        logError(`MinIO 롤백 실패: ${rollbackErr}`);
+      }
+      throw err;
+    }
+
+    return { id, store: args.store, objectKey, bucket, etag, size };
+  } catch (err) {
+    handleNetworkError(err, "파일 저장");
+  }
 }

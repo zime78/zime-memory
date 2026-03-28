@@ -15,6 +15,8 @@ import {
   getPresignedUrl,
   isMinioReady,
 } from "../minioService.js";
+import { isOnline, handleNetworkError } from "../connectionMonitor.js";
+import { config } from "../../config.js";
 import type { MemoryPayload, MemoryStore, RouteResult } from "../../types/index.js";
 
 /** general store 저장 — 기존 Qdrant 동작 */
@@ -35,32 +37,41 @@ export async function saveGeneral(args: {
   /** 사전 계산된 임베딩 벡터 (제공 시 재생성 생략) */
   precomputedVector?: number[];
 }): Promise<RouteResult> {
-  const id = args.id || uuidv4();
-  const now = new Date().toISOString();
-  /* CRITICAL fix: 호출자가 벡터를 제공하면 재생성하지 않는다 */
-  const vector = args.precomputedVector ??
-    await generateEmbedding(args.title ? `${args.title}\n\n${args.content}` : args.content);
+  /* 오프라인 시 쓰기 차단 */
+  if (config.cache.enabled && !isOnline()) {
+    throw new Error("오프라인 모드에서는 저장 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
+  }
 
-  const payload: MemoryPayload = {
-    content: args.content,
-    title: args.title,
-    tags: args.tags,
-    category: args.category as MemoryPayload["category"],
-    priority: args.priority as MemoryPayload["priority"],
-    source: args.source,
-    status: (args.status as "published" | "draft") || "published",
-    ttl: args.ttl,
-    expiresAt: args.expiresAt,
-    pinned: args.pinned,
-    parentId: args.parentId,
-    relatedIds: args.relatedIds,
-    createdAt: now,
-    updatedAt: now,
-    store: "general",
-  };
+  try {
+    const id = args.id || uuidv4();
+    const now = new Date().toISOString();
+    /* CRITICAL fix: 호출자가 벡터를 제공하면 재생성하지 않는다 */
+    const vector = args.precomputedVector ??
+      await generateEmbedding(args.title ? `${args.title}\n\n${args.content}` : args.content);
 
-  await upsertMemory(id, vector, payload);
-  return { id, store: "general" };
+    const payload: MemoryPayload = {
+      content: args.content,
+      title: args.title,
+      tags: args.tags,
+      category: args.category as MemoryPayload["category"],
+      priority: args.priority as MemoryPayload["priority"],
+      source: args.source,
+      status: (args.status as "published" | "draft") || "published",
+      ttl: args.ttl,
+      expiresAt: args.expiresAt,
+      pinned: args.pinned,
+      parentId: args.parentId,
+      relatedIds: args.relatedIds,
+      createdAt: now,
+      updatedAt: now,
+      store: "general",
+    };
+
+    await upsertMemory(id, vector, payload);
+    return { id, store: "general" };
+  } catch (err) {
+    handleNetworkError(err, "저장");
+  }
 }
 
 /** Qdrant 벡터 검색 (general/images/files) */
@@ -77,8 +88,17 @@ export async function searchQdrant(args: {
     store: string;
     payload: Record<string, unknown> | null | undefined;
     presignedUrl?: string;
+    _fromCache?: boolean;
   }>
 > {
+  /* 오프라인 + 캐시 활성 → 캐시에서 검색 */
+  if (config.cache.enabled && !isOnline()) {
+    const { getCachedSearch, getCachedList } = await import("../cacheService.js");
+    const cached = getCachedSearch(args.query);
+    if (cached) return cached.map((r) => ({ ...r, score: r.score ?? 0, payload: r.payload ?? null }));
+    return getCachedList(args.store, args.limit).map((r) => ({ ...r, score: 0, payload: r.payload ?? null }));
+  }
+
   const vector = await generateEmbedding(args.query);
 
   /* store 필터 추가 — general 포함 모든 store에 필터 적용 (C5 fix) */
@@ -118,6 +138,17 @@ export async function searchQdrant(args: {
       };
     }),
   );
+
+  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 */
+  if (config.cache.enabled && enriched.length > 0) {
+    const { cacheSearchResults, cacheMemory } = await import("../cacheService.js");
+    cacheSearchResults(args.query, enriched);
+    for (const r of enriched) {
+      if (r.payload && r.id) {
+        cacheMemory(String(r.id), r.store, r.payload as Record<string, unknown>);
+      }
+    }
+  }
 
   return enriched;
 }

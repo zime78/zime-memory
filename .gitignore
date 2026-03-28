@@ -6,10 +6,13 @@ dist/
 .env.local
 .env.*.local
 
-# 데이터 (암호화 DB, 백업, 런타임)
+# 데이터 (암호화 DB, 캐시, 백업, 런타임)
 data/secrets.db
 data/secrets.db-shm
 data/secrets.db-wal
+data/cache.db
+data/cache.db-shm
+data/cache.db-wal
 data/safety-backups/
 data/.qdrant-watermark.json
 data/.secrets-watermark.json
@@ -20,6 +23,11 @@ data/.secrets-watermark.json
 .omc/
 .bkit/
 .claude/
+
+# 개인 설정 스크립트 (크레덴셜 포함 가능)
+setup-*.sh
+*.plist
+!*.plist.example
 
 # 로그
 scripts/*.log
