@@ -10,6 +10,13 @@
 
 set -e
 
+# autossh 설치 여부 확인
+if ! command -v autossh &>/dev/null; then
+  echo "[zime-memory] autossh가 설치되어 있지 않습니다."
+  echo "  설치: brew install autossh"
+  exit 1
+fi
+
 # .env에서 환경변수 로드 (스크립트 위치 기준)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/../.env"
