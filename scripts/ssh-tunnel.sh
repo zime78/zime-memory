@@ -22,7 +22,7 @@ TUNNEL_PORTS=(
 case "${1:-start}" in
   start)
     # 이미 실행 중인지 확인
-    if pgrep -f "autossh.*${SSH_HOST}.*6333" > /dev/null 2>&1; then
+    if pgrep -f "autossh.*6333.*${SSH_HOST}" > /dev/null 2>&1; then
       echo "[zime-memory] SSH 터널이 이미 실행 중입니다."
       exit 0
     fi
@@ -47,13 +47,13 @@ case "${1:-start}" in
     ;;
 
   stop)
-    pkill -f "autossh.*${SSH_HOST}.*6333" 2>/dev/null && \
+    pkill -f "autossh.*6333.*${SSH_HOST}" 2>/dev/null && \
       echo "[zime-memory] SSH 터널 중지 완료" || \
       echo "[zime-memory] 실행 중인 터널 없음"
     ;;
 
   status)
-    if pgrep -f "autossh.*${SSH_HOST}.*6333" > /dev/null 2>&1; then
+    if pgrep -f "autossh.*6333.*${SSH_HOST}" > /dev/null 2>&1; then
       echo "[zime-memory] SSH 터널: 실행 중"
       echo "  Qdrant:  $(curl -s -o /dev/null -w '%{http_code}' http://localhost:6333/healthz 2>/dev/null || echo 'unreachable')"
       echo "  MinIO:   $(curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/live 2>/dev/null || echo 'unreachable')"
