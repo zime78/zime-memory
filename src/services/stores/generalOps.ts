@@ -15,7 +15,7 @@ import {
   getPresignedUrl,
   isMinioReady,
 } from "../minioService.js";
-import { isOnline } from "../connectionMonitor.js";
+import { isOnline, handleNetworkError } from "../connectionMonitor.js";
 import { config } from "../../config.js";
 import type { MemoryPayload, MemoryStore, RouteResult } from "../../types/index.js";
 
@@ -42,32 +42,36 @@ export async function saveGeneral(args: {
     throw new Error("오프라인 모드에서는 저장 작업을 수행할 수 없습니다. SSH 터널 연결을 확인하세요.");
   }
 
-  const id = args.id || uuidv4();
-  const now = new Date().toISOString();
-  /* CRITICAL fix: 호출자가 벡터를 제공하면 재생성하지 않는다 */
-  const vector = args.precomputedVector ??
-    await generateEmbedding(args.title ? `${args.title}\n\n${args.content}` : args.content);
+  try {
+    const id = args.id || uuidv4();
+    const now = new Date().toISOString();
+    /* CRITICAL fix: 호출자가 벡터를 제공하면 재생성하지 않는다 */
+    const vector = args.precomputedVector ??
+      await generateEmbedding(args.title ? `${args.title}\n\n${args.content}` : args.content);
 
-  const payload: MemoryPayload = {
-    content: args.content,
-    title: args.title,
-    tags: args.tags,
-    category: args.category as MemoryPayload["category"],
-    priority: args.priority as MemoryPayload["priority"],
-    source: args.source,
-    status: (args.status as "published" | "draft") || "published",
-    ttl: args.ttl,
-    expiresAt: args.expiresAt,
-    pinned: args.pinned,
-    parentId: args.parentId,
-    relatedIds: args.relatedIds,
-    createdAt: now,
-    updatedAt: now,
-    store: "general",
-  };
+    const payload: MemoryPayload = {
+      content: args.content,
+      title: args.title,
+      tags: args.tags,
+      category: args.category as MemoryPayload["category"],
+      priority: args.priority as MemoryPayload["priority"],
+      source: args.source,
+      status: (args.status as "published" | "draft") || "published",
+      ttl: args.ttl,
+      expiresAt: args.expiresAt,
+      pinned: args.pinned,
+      parentId: args.parentId,
+      relatedIds: args.relatedIds,
+      createdAt: now,
+      updatedAt: now,
+      store: "general",
+    };
 
-  await upsertMemory(id, vector, payload);
-  return { id, store: "general" };
+    await upsertMemory(id, vector, payload);
+    return { id, store: "general" };
+  } catch (err) {
+    handleNetworkError(err, "저장");
+  }
 }
 
 /** Qdrant 벡터 검색 (general/images/files) */
