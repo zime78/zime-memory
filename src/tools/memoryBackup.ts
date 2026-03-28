@@ -9,6 +9,9 @@ import {
   listSnapshots,
   copySnapshotToNas,
   createUnifiedBackup,
+  backupToRemote,
+  getRemoteBackupStatus,
+  listRemoteSnapshots,
 } from "../services/backupService.js";
 import { jsonResponse } from "../utils/response.js";
 
@@ -20,6 +23,12 @@ export const memoryBackupSchema = z.object({
   listOnly: z.boolean().default(false),
   /** 통합 백업 실행 여부 — true이면 Qdrant+MinIO+SQLCipher 모두 백업 (기본: false) */
   unified: z.boolean().default(false),
+  /** SSH를 통해 원격 호스트(mac.zime.kr)에 시크릿 백업 */
+  remoteBackup: z.boolean().default(false),
+  /** 원격 백업 상태 조회 */
+  remoteStatus: z.boolean().default(false),
+  /** 원격 스냅샷 목록 조회 */
+  remoteList: z.boolean().default(false),
 });
 
 export type MemoryBackupInput = z.infer<typeof memoryBackupSchema>;
@@ -29,6 +38,51 @@ export type MemoryBackupInput = z.infer<typeof memoryBackupSchema>;
  * unified=true이면 3개 스토어 통합 백업, 아니면 기존 Qdrant 전용 백업.
  */
 export async function memoryBackup(args: MemoryBackupInput) {
+  // ─── SSH 원격 백업 ───
+  if (args.remoteBackup) {
+    const result = await backupToRemote();
+    return jsonResponse({
+      success: true,
+      message: `SSH 원격 백업 완료 (${result.host}:${result.path})`,
+      remoteBackup: {
+        host: result.host,
+        path: result.path,
+        snapshotName: result.snapshotName,
+        dbSize: result.dbSize,
+        safetyBackupsSynced: result.safetyBackupsSynced,
+        snapshotsPruned: result.snapshotsPruned,
+      },
+    });
+  }
+
+  // ─── 원격 백업 상태 조회 ───
+  if (args.remoteStatus) {
+    const status = await getRemoteBackupStatus();
+    return jsonResponse({
+      success: true,
+      message: `원격 백업 상태 (${status.host})`,
+      status: {
+        host: status.host,
+        path: status.path,
+        latestSnapshot: status.latestSnapshot,
+        snapshotCount: status.snapshotCount,
+        safetyBackupCount: status.safetyBackupCount,
+        currentDbSize: status.currentDbSize,
+        totalSize: status.totalSize,
+      },
+    });
+  }
+
+  // ─── 원격 스냅샷 목록 ───
+  if (args.remoteList) {
+    const snapshots = await listRemoteSnapshots();
+    return jsonResponse({
+      success: true,
+      snapshots: snapshots.map((s) => ({ name: s.name, size: s.size })),
+      count: snapshots.length,
+    });
+  }
+
   // 목록만 조회
   if (args.listOnly) {
     const snapshots = await listSnapshots();
