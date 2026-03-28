@@ -5,7 +5,7 @@
  * CACHE_ENABLED=false이면 모든 함수가 no-op 동작한다.
  */
 
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { createHash } from "crypto";
 import { existsSync, statSync } from "fs";
 import { dirname } from "path";
