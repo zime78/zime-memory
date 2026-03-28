@@ -233,6 +233,76 @@ store를 지정하지 않으면 `general`로 자동 라우팅된다.
 
 ---
 
+## 데이터 흐름 다이어그램
+
+### memory_save (store: "images") — 이중 쓰기 흐름
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant M as MCP Server
+    participant O as Ollama
+    participant Mi as MinIO
+    participant Q as Qdrant
+
+    C->>M: memory_save(store: "images", filePath, description)
+    M->>O: generateEmbedding(description)
+    O-->>M: vector [1024d]
+    M->>Mi: uploadObject(bucket, objectKey, buffer)
+    Mi-->>M: { etag, size }
+    M->>Q: upsertMemory(id, vector, metadata)
+    Q-->>M: OK
+    M-->>C: { id, objectKey, bucket, size }
+```
+
+### memory_search (store: "all") — 크로스 스토어 검색
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant M as MCP Server
+    participant O as Ollama
+    participant Q as Qdrant
+    participant S as SQLCipher
+    participant Ca as Cache DB
+
+    C->>M: memory_search(store: "all", query)
+    par Qdrant 검색
+        M->>O: generateEmbedding(query)
+        O-->>M: vector
+        M->>Q: searchMemories(vector)
+        Q-->>M: results (general+images+files)
+    and SQLCipher 검색
+        M->>S: searchSecrets(query)
+        S-->>M: secrets results
+    end
+    M->>M: score 기준 병합 정렬
+    M->>Ca: 캐시 저장 (secrets 제외)
+    M-->>C: 통합 검색 결과
+```
+
+### 오프라인 폴백 흐름
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant M as MCP Server
+    participant Mon as Connection Monitor
+    participant Ca as Cache DB
+
+    Note over Mon: SSH 터널 끊김 감지
+    Mon->>Mon: online = false
+    C->>M: memory_search(query)
+    M->>Mon: isOnline()?
+    Mon-->>M: false
+    M->>Ca: getCachedSearch(query)
+    Ca-->>M: 캐시된 결과 (_fromCache: true)
+    M-->>C: 캐시 결과 반환
+    Note over C: 쓰기 시도 시 "오프라인 모드" 에러
+```
+
+---
+
 ## 실전 활용
 
 - 에러 해결 기록: store=general, category=knowledge, priority=high
