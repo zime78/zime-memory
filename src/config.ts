@@ -68,6 +68,11 @@ const envSchema = z.object({
   SQLCIPHER_DB_PATH: z.string().optional(),
   ZIME_ENCRYPTION_KEY: z.string().optional(),
 
+  /** SSH 원격 백업 (시크릿 2중화) */
+  SSH_BACKUP_HOST: z.string().optional(),
+  SSH_BACKUP_PATH: z.string().optional().default("~/zime-memory-backup"),
+  SSH_BACKUP_MAX_SNAPSHOTS: z.coerce.number().optional().default(20),
+
   /** 읽기 캐시 (원격 접속 모드용) */
   CACHE_ENABLED: z.string().optional(),
   CACHE_DB_PATH: z.string().optional(),
@@ -174,6 +179,16 @@ export const config = {
       ),
     /** 암호화 키 (필수, 미설정 시 secrets store 비활성) */
     encryptionKey: env.ZIME_ENCRYPTION_KEY,
+  },
+
+  /** SSH 원격 백업 설정 (시크릿 2중화 — 순수 백업 목적) */
+  sshBackup: {
+    /** 원격 백업 대상 SSH 호스트 (미설정 시 ZIME_SSH_HOST 사용) */
+    host: env.SSH_BACKUP_HOST || process.env.ZIME_SSH_HOST,
+    /** 원격 백업 저장 경로 */
+    path: env.SSH_BACKUP_PATH,
+    /** 원격 스냅샷 최대 보관 수 */
+    maxSnapshots: env.SSH_BACKUP_MAX_SNAPSHOTS,
   },
 
   /** 읽기 캐시 설정 (원격 접속 모드용, 오프라인 폴백) */

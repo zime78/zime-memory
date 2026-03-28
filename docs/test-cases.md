@@ -255,6 +255,38 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
   - `sqlcipher`: NAS_BACKUP_PATH 설정 시 백업 경로, 미설정 시 null
   - `errors`: 빈 배열
 
+### T20-1: SSH 원격 백업
+- **도구**: `memory_backup`
+- **입력**: `{ "remoteBackup": true }`
+- **사전 조건**: SSH 연결 가능 (`ssh mac "echo ok"`), secrets.db 존재, SSH_BACKUP_HOST 설정
+- **기대 결과**:
+  - `remoteBackup.host`: SSH 호스트명
+  - `remoteBackup.snapshotName`: `secrets_YYYY-MM-DDTHH-MM-SS.db` 형식
+  - `remoteBackup.dbSize`: 0보다 큰 숫자
+- **검증**: 원격 디렉토리에 current/secrets.db, current/.env, snapshots/ 파일 존재 확인
+
+### T20-2: SSH 원격 백업 상태 조회
+- **도구**: `memory_backup`
+- **입력**: `{ "remoteStatus": true }`
+- **사전 조건**: T20-1 완료 (원격 백업 1회 이상 수행)
+- **기대 결과**:
+  - `status.snapshotCount`: 1 이상
+  - `status.latestSnapshot`: null이 아닌 파일명
+  - `status.totalSize`: null이 아닌 용량 문자열
+
+### T20-3: SSH 원격 스냅샷 목록
+- **도구**: `memory_backup`
+- **입력**: `{ "remoteList": true }`
+- **사전 조건**: T20-1 완료
+- **기대 결과**: `snapshots` 배열, 각 항목에 `name`, `size` 포함
+- **검증**: 타임스탬프 역순 정렬
+
+### T20-4: SSH 연결 실패 시 에러 처리
+- **도구**: `memory_backup`
+- **입력**: `{ "remoteBackup": true }` (SSH 미연결 상태에서 실행)
+- **기대 결과**: `isError: true`, SSH 연결 실패 에러 메시지
+- **검증**: 로컬 데이터(secrets.db, safety-backups)에 영향 없음
+
 ---
 
 ## Phase 6: 에지 케이스
@@ -330,6 +362,10 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
 | T18 | 전체 카운트 | 2026-03-25 | PASS | store별 분류 |
 | T19 | 마이그레이션 | 2026-03-25 | PASS | withoutStore: 0 |
 | T20 | 통합 백업 | 2026-03-25 | PASS | Qdrant 스냅샷 1.2MB |
+| T20-1 | SSH 원격 백업 | | TODO | SSH 연결 필요 |
+| T20-2 | 원격 백업 상태 | | TODO | T20-1 선행 |
+| T20-3 | 원격 스냅샷 목록 | | TODO | T20-1 선행 |
+| T20-4 | SSH 연결 실패 에러 | | TODO | SSH 미연결 상태 |
 | T21 | store 미지정 | 2026-03-25 | PASS | general 자동 라우팅 |
 | T22 | images 필수 누락 | 2026-03-25 | PASS | 에러 메시지 반환 |
 | T23 | secrets 필수 누락 | 2026-03-25 | PASS | 에러 메시지 반환 |
@@ -528,6 +564,15 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
 - **도구**: `memory_restore(action:"restore-sqlcipher", backupFile:"nonexistent.db")`
 - **검증**: confirm 없이 거부 메시지 반환 (안전장치)
 
+### T57-1: 원격 스냅샷에서 복원
+- **도구**: `memory_restore(action:"restore-from-remote", snapshotName:"secrets_*.db")`
+- **사전 조건**: 원격 스냅샷 존재 (T20-1 완료)
+- **기대 결과**:
+  - `restoredFrom`: 스냅샷 파일명
+  - `localBackup`: pre-remote-restore 백업 파일명 (기존 DB가 있을 경우)
+  - `size`: 0보다 큰 숫자
+- **검증**: 복원 후 SQLCipher DB open 성공 (무결성 확인), safety-backups에 pre-remote-restore 백업 생성됨
+
 ---
 
 ## Phase 12: memory_reindex
@@ -619,6 +664,7 @@ bash scripts/test-setup.sh cleanup  # 테스트 파일 전체 삭제
 | T55 | restore restore-item | 2026-03-26 | PASS | 복원 후 list 정상 |
 | T56 | restore list-backups | 2026-03-26 | PASS | local 8건 + qdrant 12건 |
 | T57 | restore-sqlcipher dry-run | 2026-03-26 | PASS | confirm 없이 거부 |
+| T57-1 | 원격 스냅샷 복원 | | TODO | SSH 연결 + T20-1 선행 |
 | T58 | reindex | 2026-03-26 | PASS | 95건 처리, 0건 실패 |
 | T59 | export→import 왕복 | 2026-03-26 | PASS | import 후 search 정상 |
 | T60 | save→update→link→get 통합 | 2026-03-26 | PASS | 전체 플로우 정합성 |
