@@ -23,7 +23,7 @@ export const memoryBackupSchema = z.object({
   listOnly: z.boolean().default(false),
   /** 통합 백업 실행 여부 — true이면 Qdrant+MinIO+SQLCipher 모두 백업 (기본: false) */
   unified: z.boolean().default(false),
-  /** SSH를 통해 원격 호스트(mac.zime.kr)에 시크릿 백업 */
+  /** SSH를 통해 원격 호스트에 시크릿 백업 */
   remoteBackup: z.boolean().default(false),
   /** 원격 백업 상태 조회 */
   remoteStatus: z.boolean().default(false),
