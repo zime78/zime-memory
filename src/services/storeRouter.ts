@@ -158,10 +158,11 @@ export async function searchAll(args: {
 
   const results = merged.slice(0, args.limit);
 
-  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 */
+  /* 온라인 + 캐시 활성 → 결과를 캐시에 저장 (secrets 제외 — 암호화 없는 cache.db에 민감 메타데이터 저장 방지) */
   if (config.cache.enabled) {
-    cacheSearchResults(args.query, results);
-    for (const r of results) {
+    const cacheable = results.filter((r) => r.store !== "secrets");
+    cacheSearchResults(args.query, cacheable);
+    for (const r of cacheable) {
       if (r.payload && r.id) {
         cacheMemory(String(r.id), r.store, r.payload as Record<string, unknown>);
       }

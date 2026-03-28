@@ -3,15 +3,20 @@
 <plist version="1.0">
 <dict>
     <!-- zime-memory SSH 터널 launchd 서비스
-         로그인 시 자동으로 Mac Mini Docker 서비스에 SSH 터널을 설정한다.
+         로그인 시 자동으로 원격 Docker 서비스에 SSH 터널을 설정한다.
 
-         설치:
-           ln -sf ~/mcp/zime-memory/scripts/com.zime.memory-tunnel.plist ~/Library/LaunchAgents/
-           launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+         사용법:
+           1. 이 파일을 복사하여 호스트명을 수정:
+              cp scripts/com.zime.memory-tunnel.plist.example scripts/com.zime.memory-tunnel.plist
+              # 파일 내 "your-server"를 실제 SSH 호스트로 변경
 
-         제거:
-           launchctl unload ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
-           rm ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+           2. LaunchAgents에 등록:
+              ln -sf ~/mcp/zime-memory/scripts/com.zime.memory-tunnel.plist ~/Library/LaunchAgents/
+              launchctl load ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+
+           3. 제거:
+              launchctl unload ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
+              rm ~/Library/LaunchAgents/com.zime.memory-tunnel.plist
     -->
     <key>Label</key>
     <string>com.zime.memory-tunnel</string>
@@ -40,7 +45,8 @@
         <string>9001:localhost:9001</string>
         <string>-L</string>
         <string>11434:localhost:11434</string>
-        <string>mac</string>
+        <!-- TODO: 아래 호스트명을 SSH config의 Host명으로 변경하세요 -->
+        <string>your-server</string>
     </array>
 
     <key>RunAtLoad</key>
