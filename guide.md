@@ -173,6 +173,16 @@ store를 지정하지 않으면 `general`로 자동 라우팅된다.
 - 자동 프루닝: 오래된 백업은 자동 삭제 (Qdrant/NAS/로컬 각각 최대 20개 유지)
 - MAX_QDRANT_SNAPSHOTS, MAX_NAS_BACKUPS 환경변수로 보관 수 조정 가능
 
+## SSH 원격 백업 (memory_backup — 시크릿 2중화)
+- "원격 백업해줘" → memory_backup(remoteBackup: true) → SSH로 원격 호스트에 시크릿 백업
+- "원격 백업 상태" → memory_backup(remoteStatus: true) → 스냅샷 수, 최신 시각, 용량
+- "원격 스냅샷 목록" → memory_backup(remoteList: true)
+- SSH_BACKUP_HOST, SSH_BACKUP_PATH 환경변수로 대상 설정
+- 독립 스크립트: `./scripts/ssh-backup.sh {start|status|list|restore <snapshot>}`
+- 순수 백업 2중화 목적 — 원격지에서 데이터를 운영하지 않음
+- secrets.db(AES-256 암호화) + .env(암호화 키) + safety-backups 동기화
+- 타임스탬프 스냅샷 자동 생성 + 프루닝 (기본 최근 20개 유지)
+
 ## Obsidian 동기화 (memory_obsidian_sync)
 - "Obsidian으로 내보내줘" → memory_obsidian_sync(direction: "export")
 - "Obsidian에서 가져와줘" → memory_obsidian_sync(direction: "import")
@@ -346,6 +356,9 @@ sequenceDiagram
 | | MAX_NAS_BACKUPS | 20 | NAS 디렉토리별 백업 최대 보관 수 |
 | | DISABLE_LOCAL_BACKUP | (미설정) | true 시 로컬 안전 백업 비활성 |
 | | SOFT_DELETE_RETENTION_DAYS | 30 | soft delete 보존 기간 (일) |
+| SSH 백업 | SSH_BACKUP_HOST | (ZIME_SSH_HOST) | 원격 백업 대상 SSH 호스트 |
+| | SSH_BACKUP_PATH | ~/zime-memory-backup | 원격 백업 저장 경로 |
+| | SSH_BACKUP_MAX_SNAPSHOTS | 20 | 원격 스냅샷 최대 보관 수 |
 | Obsidian | OBSIDIAN_VAULT_PATH | (미설정) | Vault 루트 경로 |
 | 로깅 | LOG_LEVEL | info | 로그 레벨 (debug/info/warn/error) |
 

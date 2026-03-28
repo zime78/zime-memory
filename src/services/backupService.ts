@@ -7,7 +7,9 @@ import { config } from "../config.js";
 import { info, error as logError } from "../utils/logger.js";
 import { mkdir, writeFile, copyFile, stat, readdir, unlink } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { execFile } from "child_process";
+import { fileURLToPath } from "url";
 import {
   listObjects,
   downloadObject,
@@ -384,4 +386,291 @@ export async function pruneNasBackups(dir: string, maxCount: number): Promise<nu
     info(`[PRUNE] NAS 백업 ${deleted}개 삭제 (${dir})`);
   }
   return deleted;
+}
+
+// ─────────────────────────────────────────────
+// SSH 원격 백업 (시크릿 2중화)
+// ─────────────────────────────────────────────
+
+/** SSH 명령을 Promise로 실행하는 헬퍼 */
+function execAsync(
+  cmd: string,
+  args: string[]
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 30_000 }, (err, stdout, stderr) => {
+      if (err) reject(err);
+      else resolve({ stdout: stdout.toString(), stderr: stderr.toString() });
+    });
+  });
+}
+
+/** 프로젝트 루트 경로를 구한다 */
+function getProjectRoot(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  return join(dirname(__filename), "..", "..");
+}
+
+/** SSH 원격 백업 설정 검증 */
+function getSshBackupConfig(): { host: string; path: string; maxSnapshots: number } {
+  const host = config.sshBackup.host;
+  if (!host) {
+    throw new Error(
+      "SSH 백업 호스트가 설정되지 않았습니다 (SSH_BACKUP_HOST 또는 ZIME_SSH_HOST 환경변수)"
+    );
+  }
+  return {
+    host,
+    path: config.sshBackup.path,
+    maxSnapshots: config.sshBackup.maxSnapshots,
+  };
+}
+
+/** 원격 백업 결과 타입 */
+export interface RemoteBackupResult {
+  host: string;
+  path: string;
+  snapshotName: string;
+  dbSize: number;
+  safetyBackupsSynced: boolean;
+  snapshotsPruned: number;
+}
+
+/** 원격 백업 상태 타입 */
+export interface RemoteBackupStatus {
+  host: string;
+  path: string;
+  latestSnapshot: string | null;
+  snapshotCount: number;
+  safetyBackupCount: number;
+  currentDbSize: string | null;
+  totalSize: string | null;
+}
+
+/** 원격 스냅샷 정보 타입 */
+export interface RemoteSnapshot {
+  name: string;
+  size: string;
+}
+
+/**
+ * SSH를 통해 시크릿 데이터를 원격 호스트에 백업한다.
+ * rsync로 secrets.db, .env, safety-backups를 전송하고 타임스탬프 스냅샷을 생성한다.
+ */
+export async function backupToRemote(): Promise<RemoteBackupResult> {
+  const { host, path: remotePath, maxSnapshots } = getSshBackupConfig();
+  const projectRoot = getProjectRoot();
+  const dbPath = config.sqlcipher.dbPath;
+  const envPath = join(projectRoot, ".env");
+  const safetyDir = join(projectRoot, "data", "safety-backups");
+
+  // 1. SSH 연결 확인
+  try {
+    await execAsync("ssh", ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "echo ok"]);
+  } catch {
+    throw new Error(`SSH 연결 실패: ${host}`);
+  }
+
+  // 2. secrets.db 존재 확인
+  if (!existsSync(dbPath)) {
+    throw new Error(`secrets.db가 존재하지 않습니다: ${dbPath}`);
+  }
+
+  // 3. 원격 디렉토리 생성
+  await execAsync("ssh", [host, `mkdir -p ${remotePath}/{current,safety-backups,snapshots}`]);
+
+  // 4. rsync — 최신 DB + .env 전송
+  const rsyncFiles = [dbPath];
+  if (existsSync(envPath)) rsyncFiles.push(envPath);
+  await execAsync("rsync", ["-az", ...rsyncFiles, `${host}:${remotePath}/current/`]);
+  await execAsync("ssh", [host, `chmod 600 ${remotePath}/current/*`]);
+  info(`[SSH-BACKUP] current/ 동기화 완료 (${host}:${remotePath})`);
+
+  // 5. safety-backups 동기화
+  let safetyBackupsSynced = false;
+  if (existsSync(safetyDir)) {
+    await execAsync("rsync", [
+      "-az", "--delete",
+      `${safetyDir}/`,
+      `${host}:${remotePath}/safety-backups/`,
+    ]);
+    safetyBackupsSynced = true;
+    info(`[SSH-BACKUP] safety-backups/ 동기화 완료`);
+  }
+
+  // 6. 타임스탬프 스냅샷 생성
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const snapshotName = `secrets_${timestamp}.db`;
+  await execAsync("ssh", [
+    host,
+    `cp ${remotePath}/current/secrets.db ${remotePath}/snapshots/${snapshotName} && chmod 600 ${remotePath}/snapshots/${snapshotName}`,
+  ]);
+  info(`[SSH-BACKUP] 스냅샷 생성: ${snapshotName}`);
+
+  // 7. 프루닝
+  let snapshotsPruned = 0;
+  try {
+    const { stdout } = await execAsync("ssh", [
+      host,
+      `cd ${remotePath}/snapshots && ls -1t *.db 2>/dev/null | tail -n +${maxSnapshots + 1} | xargs -r rm -v 2>&1 | wc -l`,
+    ]);
+    snapshotsPruned = parseInt(stdout.trim(), 10) || 0;
+    if (snapshotsPruned > 0) {
+      info(`[SSH-BACKUP] 스냅샷 프루닝: ${snapshotsPruned}개 삭제`);
+    }
+  } catch {
+    /* 프루닝 실패는 무시 */
+  }
+
+  // 8. DB 크기 확인
+  const fileInfo = await stat(dbPath);
+
+  return {
+    host,
+    path: remotePath,
+    snapshotName,
+    dbSize: fileInfo.size,
+    safetyBackupsSynced,
+    snapshotsPruned,
+  };
+}
+
+/**
+ * 원격 백업 상태를 조회한다. (스냅샷 수, 최신 백업 시각, 총 용량)
+ */
+export async function getRemoteBackupStatus(): Promise<RemoteBackupStatus> {
+  const { host, path: remotePath } = getSshBackupConfig();
+
+  // SSH 연결 확인
+  try {
+    await execAsync("ssh", ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "echo ok"]);
+  } catch {
+    throw new Error(`SSH 연결 실패: ${host}`);
+  }
+
+  // 디렉토리 존재 확인
+  try {
+    await execAsync("ssh", [host, `[ -d ${remotePath} ]`]);
+  } catch {
+    return {
+      host,
+      path: remotePath,
+      latestSnapshot: null,
+      snapshotCount: 0,
+      safetyBackupCount: 0,
+      currentDbSize: null,
+      totalSize: null,
+    };
+  }
+
+  // 상태 정보 수집 (단일 SSH 호출로 최적화)
+  const { stdout } = await execAsync("ssh", [
+    host,
+    [
+      `echo "===LATEST==="; ls -1t ${remotePath}/snapshots/*.db 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo ""`,
+      `echo "===SNAP_COUNT==="; ls -1 ${remotePath}/snapshots/*.db 2>/dev/null | wc -l`,
+      `echo "===SAFETY_COUNT==="; ls -1 ${remotePath}/safety-backups/*.db 2>/dev/null | wc -l`,
+      `echo "===DB_SIZE==="; ls -lh ${remotePath}/current/secrets.db 2>/dev/null | awk '{print $5}' || echo ""`,
+      `echo "===TOTAL_SIZE==="; du -sh ${remotePath} 2>/dev/null | cut -f1 || echo ""`,
+    ].join("; "),
+  ]);
+
+  const extract = (marker: string): string => {
+    const re = new RegExp(`===` + marker + `===\\s*(.*)`, "m");
+    return re.exec(stdout)?.[1]?.trim() || "";
+  };
+
+  return {
+    host,
+    path: remotePath,
+    latestSnapshot: extract("LATEST") || null,
+    snapshotCount: parseInt(extract("SNAP_COUNT"), 10) || 0,
+    safetyBackupCount: parseInt(extract("SAFETY_COUNT"), 10) || 0,
+    currentDbSize: extract("DB_SIZE") || null,
+    totalSize: extract("TOTAL_SIZE") || null,
+  };
+}
+
+/**
+ * 원격 스냅샷 목록을 조회한다.
+ */
+export async function listRemoteSnapshots(): Promise<RemoteSnapshot[]> {
+  const { host, path: remotePath } = getSshBackupConfig();
+
+  try {
+    await execAsync("ssh", ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "echo ok"]);
+  } catch {
+    throw new Error(`SSH 연결 실패: ${host}`);
+  }
+
+  const { stdout } = await execAsync("ssh", [
+    host,
+    `ls -lhS ${remotePath}/snapshots/*.db 2>/dev/null | awk '{print $NF, $5}' | sed 's|.*/||'`,
+  ]);
+
+  if (!stdout.trim()) return [];
+
+  return stdout
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const [name, size] = line.trim().split(/\s+/);
+      return { name, size: size || "unknown" };
+    })
+    .filter((s) => s.name);
+}
+
+/**
+ * 원격 스냅샷을 로컬로 복원한다.
+ * 주의: 현재 secrets.db를 덮어쓰므로 사전에 로컬 safety-backup을 자동 생성한다.
+ */
+export async function restoreFromRemote(snapshotName: string): Promise<{
+  restoredFrom: string;
+  localBackup: string | null;
+  size: number;
+}> {
+  const { host, path: remotePath } = getSshBackupConfig();
+  const dbPath = config.sqlcipher.dbPath;
+  const projectRoot = getProjectRoot();
+  const safetyDir = join(projectRoot, "data", "safety-backups");
+
+  // SSH 연결 확인
+  try {
+    await execAsync("ssh", ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, "echo ok"]);
+  } catch {
+    throw new Error(`SSH 연결 실패: ${host}`);
+  }
+
+  // 원격 스냅샷 존재 확인
+  try {
+    await execAsync("ssh", [host, `[ -f ${remotePath}/snapshots/${snapshotName} ]`]);
+  } catch {
+    throw new Error(`원격 스냅샷을 찾을 수 없습니다: ${snapshotName}`);
+  }
+
+  // 로컬 safety-backup 생성
+  let localBackup: string | null = null;
+  if (existsSync(dbPath)) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const backupName = `secrets_pre-remote-restore_${timestamp}.db`;
+    if (!existsSync(safetyDir)) {
+      await mkdir(safetyDir, { recursive: true });
+    }
+    const backupPath = join(safetyDir, backupName);
+    await copyFile(dbPath, backupPath);
+    localBackup = backupName;
+    info(`[SSH-BACKUP] 복원 전 로컬 백업 생성: ${backupName}`);
+  }
+
+  // 원격 스냅샷 → 로컬 복원
+  await execAsync("rsync", ["-az", `${host}:${remotePath}/snapshots/${snapshotName}`, dbPath]);
+  const fileInfo = await stat(dbPath);
+
+  info(`[SSH-BACKUP] 원격 스냅샷 복원 완료: ${snapshotName} (${fileInfo.size} bytes)`);
+
+  return {
+    restoredFrom: snapshotName,
+    localBackup,
+    size: fileInfo.size,
+  };
 }

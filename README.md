@@ -152,7 +152,7 @@ cd zime-memory
 | `memory_bulk_delete` | 필터 기반 일괄 삭제 |
 | `memory_link` | 메모리 간 관계 설정 |
 | `memory_summarize` | LLM 기반 카테고리 요약 |
-| `memory_backup` | Qdrant + MinIO + SQLCipher 통합 백업 |
+| `memory_backup` | Qdrant + MinIO + SQLCipher 통합 백업, SSH 원격 백업 |
 | `memory_restore` | soft-delete 복원, DB 복원 |
 | `memory_download` | 이미지/파일 다운로드 (Presigned URL) |
 | `memory_reindex` | 임베딩 모델 변경 시 벡터 재생성 |
@@ -166,6 +166,7 @@ cd zime-memory
 - **크로스 스토어 검색** — `store: "all"`로 4개 스토어 통합 검색
 - **Obsidian 연동** — YAML frontmatter 기반 양방향 동기화
 - **자동 백업** — NAS 복사, 스냅샷 프루닝 (최대 20개)
+- **SSH 원격 백업** — 시크릿 2중화, rsync 기반 원격 호스트 백업 + 스냅샷 관리
 - **Draft & TTL** — 임시 저장, 자동 만료
 - **메모리 연결** — 계층 구조 (parentId) + 네트워크 구조 (relatedIds)
 - **원격 접속 모드** — SSH 터널 기반 원격 Docker 연결 + 읽기 캐시 오프라인 폴백
@@ -305,6 +306,9 @@ cp .env.example .env
 | `ZIME_ENCRYPTION_KEY` | * | | SQLCipher 암호화 키 (secrets 사용 시) |
 | `OBSIDIAN_VAULT_PATH` | | | Obsidian vault 경로 |
 | `NAS_BACKUP_PATH` | | | NAS 백업 경로 |
+| `SSH_BACKUP_HOST` | | | SSH 원격 백업 대상 호스트 (미설정 시 ZIME_SSH_HOST) |
+| `SSH_BACKUP_PATH` | | `~/zime-memory-backup` | 원격 백업 저장 경로 |
+| `SSH_BACKUP_MAX_SNAPSHOTS` | | `20` | 원격 스냅샷 최대 보관 수 |
 | `CACHE_ENABLED` | | `true` | 읽기 캐시 활성화 (서버 모드에서 `false`) |
 | `CACHE_MAX_AGE_DAYS` | | `7` | 캐시 최대 보관 일수 |
 | `CACHE_MAX_ENTRIES` | | `2000` | 캐시 최대 항목 수 |
@@ -364,7 +368,7 @@ zime-memory/
 │   │   │   ├── ollamaProvider.ts   # Ollama REST API 프로바이더
 │   │   │   ├── localProvider.ts    # @huggingface/transformers 로컬 프로바이더
 │   │   │   └── noopProvider.ts     # Off 모드 (제로 벡터)
-│   │   ├── backupService.ts     # 통합 백업
+│   │   ├── backupService.ts     # 통합 백업 + SSH 원격 백업
 │   │   ├── obsidianService.ts   # Obsidian 동기화
 │   │   ├── safetyService.ts     # 워터마크 검증
 │   │   ├── storeRouter.ts       # store 라우팅
@@ -381,6 +385,7 @@ zime-memory/
 │   ├── check-expiry.cjs         # 시크릿 만료 알림 (Slack)
 │   ├── test-setup.sh            # 테스트 데이터 생성
 │   ├── ssh-tunnel.sh            # SSH 터널 자동 연결
+│   ├── ssh-backup.sh            # SSH 원격 백업 (시크릿 2중화)
 │   └── com.zime.memory-tunnel.plist.example  # launchd 자동시작
 ├── docker-compose.yml           # Qdrant + MinIO
 ├── install.sh                   # 자동 설치 스크립트
